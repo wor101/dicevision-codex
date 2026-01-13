@@ -440,23 +440,14 @@ local function pollForRolls(callback)
         pollMode
     )
 
-    print("POLL: DiceVision polling URL: " .. url)
-
     net.Get{
         url = url,
         success = function(data)
-            print("POLL: DiceVision poll success, data type: " .. type(data))
             if data then
                 local rollCount = (data.rolls and #data.rolls) or 0
-                print("POLL: DiceVision poll returned " .. rollCount .. " rolls")
                 if rollCount > 0 then
-                    for i, roll in ipairs(data.rolls) do
-                        print("POLL: DiceVision roll " .. i .. ": total=" .. tostring(roll.total))
-                    end
                     callback(data.rolls)
                 end
-            else
-                print("POLL: DiceVision poll returned nil data")
             end
 
             -- Update poll interval if server suggests different
@@ -465,7 +456,6 @@ local function pollForRolls(callback)
             end
         end,
         error = function(err, statusCode)
-            print("POLL: DiceVision poll error: " .. tostring(err) .. " (status: " .. tostring(statusCode) .. ")")
 
             -- Handle session expired (404)
             if statusCode == 404 or (type(err) == "string" and err:find("404")) then
@@ -558,9 +548,6 @@ local function postDiceVisionRollToChat(rollData, rollInfo, pendingRoll)
     }
 
     chat.SendCustom(message)
-
-    print(string.format("DBG: DiceVision roll posted to chat - %s: total=%d, tier=%d",
-        pendingRoll.description or "Roll", rollInfo.total, rollInfo.tiers))
 end
 
 local function handlePendingRoll(rollData)
@@ -573,103 +560,57 @@ local function handlePendingRoll(rollData)
     DiceVision.waitingForRoll = false
     hideWaitingDialog()
 
-    print("DBG: DiceVision processing physical dice for: " .. tostring(pendingRoll.description or pendingRoll.roll))
+    -- Calculate values from physical dice
+    local modifier = extractModifierFromRoll(pendingRoll.originalRoll)
+    local diceSum = 0
 
-    -- Construct rollInfo from physical dice
-    local rollInfo = constructRollInfo(rollData.dice, pendingRoll)
-
-    print(string.format("DBG: DiceVision rollInfo constructed - total=%d, naturalRoll=%d, nat1=%s, nat20=%s",
-        rollInfo.total, rollInfo.naturalRoll, tostring(rollInfo.nat1), tostring(rollInfo.nat20)))
-
-    -- DBG: Dump rollInfo fields for comparison with normal rolls (same fields in same order)
-    print("DBG: ====== DICEVISION ROLLINFO STRUCTURE ======")
-    print("DBG: rollInfo type = " .. type(rollInfo))
-    print("DBG: rollInfo.total = " .. tostring(rollInfo.total) .. " (type: " .. type(rollInfo.total) .. ")")
-    print("DBG: rollInfo.naturalRoll = " .. tostring(rollInfo.naturalRoll) .. " (type: " .. type(rollInfo.naturalRoll) .. ")")
-    print("DBG: rollInfo.tiers = " .. tostring(rollInfo.tiers) .. " (type: " .. type(rollInfo.tiers) .. ")")
-    print("DBG: rollInfo.nat1 = " .. tostring(rollInfo.nat1) .. " (type: " .. type(rollInfo.nat1) .. ")")
-    print("DBG: rollInfo.nat20 = " .. tostring(rollInfo.nat20) .. " (type: " .. type(rollInfo.nat20) .. ")")
-    print("DBG: rollInfo.isComplete = " .. tostring(rollInfo.isComplete) .. " (type: " .. type(rollInfo.isComplete) .. ")")
-    print("DBG: rollInfo.waitingOnDice = " .. tostring(rollInfo.waitingOnDice) .. " (type: " .. type(rollInfo.waitingOnDice) .. ")")
-    print("DBG: rollInfo.advantage = " .. tostring(rollInfo.advantage) .. " (type: " .. type(rollInfo.advantage) .. ")")
-    print("DBG: rollInfo.disadvantage = " .. tostring(rollInfo.disadvantage) .. " (type: " .. type(rollInfo.disadvantage) .. ")")
-    print("DBG: rollInfo.boons = " .. tostring(rollInfo.boons) .. " (type: " .. type(rollInfo.boons) .. ")")
-    print("DBG: rollInfo.banes = " .. tostring(rollInfo.banes) .. " (type: " .. type(rollInfo.banes) .. ")")
-    print("DBG: rollInfo.rolls = " .. tostring(rollInfo.rolls) .. " (type: " .. type(rollInfo.rolls) .. ")")
-    print("DBG: rollInfo.description = " .. tostring(rollInfo.description) .. " (type: " .. type(rollInfo.description) .. ")")
-    print("DBG: rollInfo.properties = " .. tostring(rollInfo.properties) .. " (type: " .. type(rollInfo.properties) .. ")")
-    print("DBG: rollInfo.categories = " .. tostring(rollInfo.categories) .. " (type: " .. type(rollInfo.categories) .. ")")
-    print("DBG: rollInfo.resultInfo = " .. tostring(rollInfo.resultInfo) .. " (type: " .. type(rollInfo.resultInfo) .. ")")
-    print("DBG: rollInfo.token = " .. tostring(rollInfo.token) .. " (type: " .. type(rollInfo.token) .. ")")
-    print("DBG: rollInfo.autocrit = " .. tostring(rollInfo.autocrit) .. " (type: " .. type(rollInfo.autocrit) .. ")")
-    print("DBG: rollInfo.forcedResult = " .. tostring(rollInfo.forcedResult) .. " (type: " .. type(rollInfo.forcedResult) .. ")")
-    print("DBG: rollInfo.autosuccess = " .. tostring(rollInfo.autosuccess) .. " (type: " .. type(rollInfo.autosuccess) .. ")")
-    print("DBG: rollInfo.autofailure = " .. tostring(rollInfo.autofailure) .. " (type: " .. type(rollInfo.autofailure) .. ")")
-    print("DBG: ====== END DICEVISION ROLLINFO ======")
-
-    -- Fire the beginRoll callback if provided (for immediate UI updates)
-    if pendingRoll.beginRoll then
-        print("DBG: DiceVision firing beginRoll callback")
-        local success, err = pcall(function()
-            pendingRoll.beginRoll(rollInfo)
-        end)
-        if not success then
-            print("DBG: DiceVision beginRoll callback error: " .. tostring(err))
-        end
+    -- Build dice info for visual display
+    local diceForMessage = {}
+    for i, die in ipairs(rollData.dice) do
+        local faces = getDiceFaces(die.type)
+        diceSum = diceSum + die.value
+        diceForMessage[i] = {
+            faces = faces,
+            value = die.value,
+        }
     end
 
-    -- Check if dialog control functions are available (new flow)
-    if pendingRoll.showResults and pendingRoll.setupAcceptButton then
-        print("DBG: DiceVision using dialog control flow - waiting for Accept button")
+    local total = diceSum + modifier
+    local tier = calculateTier(total)
 
-        -- Show the tier result in the dialog
-        local success, err = pcall(function()
-            pendingRoll.showResults(rollInfo)
-        end)
-        if not success then
-            print("DBG: DiceVision showResults error: " .. tostring(err))
-        end
-
-        -- Set up the Accept button to complete the roll
-        success, err = pcall(function()
-            pendingRoll.setupAcceptButton(function()
-                print("DBG: DiceVision Accept button callback - completing roll")
-                -- Now call completeRoll (triggers game mechanics)
-                if pendingRoll.completeRoll then
-                    local completeSuccess, completeErr = pcall(function()
-                        pendingRoll.completeRoll(rollInfo)
-                    end)
-                    if not completeSuccess then
-                        print("DBG: DiceVision completeRoll callback error: " .. tostring(completeErr))
-                    end
-                end
-                -- Post to chat after acceptance
-                postDiceVisionRollToChat(rollData, rollInfo, pendingRoll)
-            end)
-        end)
-        if not success then
-            print("DBG: DiceVision setupAcceptButton error: " .. tostring(err))
-        end
-    else
-        -- Fallback: No dialog control available, complete immediately (old behavior)
-        print("DBG: DiceVision using immediate completion flow (no dialog control)")
-
-        -- Fire the completeRoll callback if provided (this triggers game mechanics)
-        if pendingRoll.completeRoll then
-            print("DBG: DiceVision firing completeRoll callback")
-            local success, err = pcall(function()
-                pendingRoll.completeRoll(rollInfo)
-            end)
-            if not success then
-                print("DBG: DiceVision completeRoll callback error: " .. tostring(err))
-            end
-        end
-
-        -- Post to chat immediately
-        postDiceVisionRollToChat(rollData, rollInfo, pendingRoll)
+    -- Get the stored rollArgs and modify the roll to be deterministic
+    local rollArgs = pendingRoll.rollArgs
+    if not rollArgs then
+        chat.Send("[DiceVision] Error: Roll context not available. Try again.")
+        return false
     end
 
-    print("DBG: DiceVision handlePendingRoll complete")
+    -- Get token ID for the visual message
+    local tokenid = rollArgs.tokenid
+    if not tokenid and rollArgs.creature then
+        tokenid = dmhub.LookupTokenId(rollArgs.creature)
+    end
+
+    -- Send visual dice display to chat (shows dice icons with individual values)
+    local visualMessage = DiceVisionRollMessage.new{
+        description = pendingRoll.description or "Physical Dice",
+        dice = diceForMessage,
+        modifier = modifier,
+        total = total,
+        tier = tier,
+        tokenid = tokenid,
+    }
+    chat.SendCustom(visualMessage)
+
+    -- Change the roll to be the deterministic total
+    -- This way the C# engine calculates tiers correctly from our physical dice total
+    rollArgs.roll = tostring(total)
+    rollArgs.instant = true  -- No dice animation needed since we're using a fixed total
+
+    -- Now call dmhub.Roll with the modified args
+    -- This creates a proper C# rollInfo object with correct tier calculations
+    dmhub.Roll(rollArgs)
+
     return true
 end
 
@@ -682,7 +623,6 @@ local function checkRollTimeout()
             DiceVision.waitingForRoll = false
             DiceVision.pendingRoll = nil
             hideWaitingDialog()
-            print("DBG: DiceVision timeout - roll cancelled")
         end
     end
 end
@@ -691,48 +631,26 @@ end
 -- RollDialog Hook (called from RollDialog.lua before dmhub.Roll)
 -- ============================================================================
 
--- Global function that RollDialog.lua calls before dmhub.Roll
--- Return true to intercept and handle the roll externally
--- Return false to let the normal roll proceed
-print("DBG: DiceVision - Defining RollDialog_BeforeRoll global function")
+-- Global function that DSRollDialog.lua calls before dmhub.Roll
+-- Returns "intercept" to prevent dmhub.Roll from being called - we'll call it ourselves
+-- with a deterministic total once physical dice arrive
 RollDialog_BeforeRoll = function(context)
-    print("DBG: DiceVision RollDialog_BeforeRoll called")
-    print("DBG: DiceVision mode=" .. DiceVision.mode .. ", connected=" .. tostring(DiceVision.connected))
-
     -- Only intercept if in replace mode and connected
     if DiceVision.mode ~= "replace" or not DiceVision.connected then
-        print("DBG: DiceVision - not intercepting (mode or connection)")
-        return false  -- Don't intercept, let normal roll proceed
+        return nil  -- Let normal roll proceed
     end
 
     -- If already waiting, don't intercept again
     if DiceVision.waitingForRoll then
-        print("DBG: DiceVision - not intercepting (already waiting)")
-        return false
+        return nil
     end
 
-    print("DBG: DiceVision intercepting roll: " .. tostring(context.roll))
-    print("DBG: DiceVision description: " .. tostring(context.description))
-
-    -- Store the roll context for when physical dice arrive
+    -- Store the roll context including the full rollArgs
+    -- We'll modify rollArgs.roll and call dmhub.Roll when physical dice arrive
     DiceVision.pendingRoll = {
-        roll = context.roll,
+        rollArgs = context.rollArgs,  -- The full rollArgs object
+        originalRoll = context.roll,   -- Store the original roll string for modifier extraction
         description = context.description,
-        creature = context.creature,
-        tokenid = context.tokenid,
-        properties = context.properties,
-        dmonly = context.dmonly,
-        guid = context.guid,
-        -- Callbacks to fire when physical dice arrive
-        beginRoll = context.beginRoll,
-        completeRoll = context.completeRoll,
-        activeRoll = context.activeRoll,
-        modifiers = context.modifiers,
-        inspirationUsed = context.inspirationUsed,
-        creatureUsed = context.creatureUsed,
-        -- Dialog control functions (new)
-        showResults = context.showResults,
-        setupAcceptButton = context.setupAcceptButton,
     }
 
     DiceVision.waitingForRoll = true
@@ -741,20 +659,18 @@ RollDialog_BeforeRoll = function(context)
     showWaitingDialog()
     chat.Send("[DiceVision] Waiting for physical dice...")
 
-    return true  -- We handled it, don't call dmhub.Roll
+    return "intercept"  -- Tell DSRollDialog NOT to call dmhub.Roll - we'll do it
 end
 
 -- No-op functions for mode switching compatibility
 local function installRollInterceptor()
-    -- Hook is now in RollDialog.lua, no installation needed
-    print("DBG: DiceVision replace mode enabled (using RollDialog hook)")
+    -- Hook is now in DSRollDialog.lua, no installation needed
 end
 
 removeRollInterceptor = function()
     -- Clear any pending state when switching modes
     DiceVision.pendingRoll = nil
     DiceVision.waitingForRoll = false
-    print("DBG: DiceVision replace mode disabled")
 end
 
 -- ============================================================================
@@ -767,7 +683,6 @@ local function startPolling()
     end
 
     DiceVision.isPolling = true
-    print("POLL: DiceVision polling started")
 
     -- Use a coroutine-style polling with scheduled callbacks
     local function poll()
@@ -803,7 +718,6 @@ end
 
 stopPolling = function()
     DiceVision.isPolling = false
-    print("POLL: DiceVision polling stopped")
 end
 
 -- ============================================================================
@@ -924,5 +838,4 @@ Commands.dicevision = Commands.dv
 -- Initialization
 -- ============================================================================
 
-print("DBG: DiceVision integration mod loaded")
-print("DBG: Use /dv help for commands")
+print("[DiceVision] Integration mod loaded. Use /dv help for commands.")
