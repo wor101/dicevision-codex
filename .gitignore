@@ -1,0 +1,25 @@
+# Cache directories
+Codex/cache/
+Codex/cache-thumbnails/
+Codex/char-cache/
+Codex/code-cache/
+Codex/raw-texture-cache/
+Codex/thumbnail-cache/
+Codex/HTTPCache/
+
+# Backups
+Codex/backups/
+
+# Logs
+Codex/*.log
+Codex/*.txt
+
+# Unity cache
+Codex/Unity/
+
+# Blobs
+Codex/blobs/
+
+# Cookies and Library files
+Codex/Cookies/
+Codex/Library
