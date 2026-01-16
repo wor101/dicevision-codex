@@ -101,6 +101,67 @@ local function calculateTier(total)
     end
 end
 
+-- Split combined m_boons (-2 to +2) into separate edge/bane counts
+local function SplitBoons(combinedBoons)
+    combinedBoons = combinedBoons or 0
+    if combinedBoons >= 0 then
+        return combinedBoons, 0  -- edges, banes
+    else
+        return 0, -combinedBoons  -- edges, banes
+    end
+end
+
+-- Calculate roll modifier from edges/banes (NOT tier shift)
+-- Returns 0 for double edge/bane cases (tier shift handled by DiceResultToTier)
+local function GetRollModFromEdgesAndBanes(edges, banes)
+    edges = edges or 0
+    banes = banes or 0
+
+    local bonus = 0
+    if banes == 0 then
+        if edges == 1 then
+            bonus = 2
+        end
+        -- 2+ edges: bonus = 0, tier shift happens in DiceResultToTier
+    elseif edges == 0 then
+        if banes == 1 then
+            bonus = -2
+        end
+        -- 2+ banes: bonus = 0, tier shift happens in DiceResultToTier
+    elseif edges > banes then
+        bonus = 2
+    elseif edges < banes then
+        bonus = -2
+    else
+        bonus = 0
+    end
+
+    return bonus
+end
+
+-- Calculate tier with edge/bane effects (for double edge/bane tier shifts)
+local function CalculateTierWithEdges(total, edges, banes)
+    local tier = 1
+    if total >= 17 then
+        tier = 3
+    elseif total >= 12 then
+        tier = 2
+    end
+
+    -- Double edge/bane tier shifts (only when one side is 0)
+    if edges >= 2 and banes == 0 then
+        tier = tier + 1
+    elseif banes >= 2 and edges == 0 then
+        tier = tier - 1
+    end
+
+    -- Clamp to valid range
+    if tier > 3 then tier = 3 end
+    if tier < 1 then tier = 1 end
+
+    return tier
+end
+
 local function getTierRanges()
     -- Returns the tier threshold ranges for display
     return {
@@ -575,8 +636,20 @@ local function handlePendingRoll(rollData)
         }
     end
 
-    local total = diceSum + modifier
-    local tier = calculateTier(total)
+    -- Get edge/bane counts (stored separately in hook)
+    local edges = pendingRoll.edges or 0
+    local banes = pendingRoll.banes or 0
+
+    -- Calculate roll modifier from edges/banes
+    -- Single edge/bane: ±2 modifier
+    -- Double edge/bane: 0 modifier (tier shift happens via callback injection)
+    local edgeBaneMod = GetRollModFromEdgesAndBanes(edges, banes)
+
+    -- Final total: physical dice + character modifier + edge/bane modifier
+    local finalTotal = diceSum + modifier + edgeBaneMod
+
+    -- Calculate tier for visual display (from final total)
+    local tier = calculateTier(finalTotal)
 
     -- Get the stored rollArgs and modify the roll to be deterministic
     local rollArgs = pendingRoll.rollArgs
@@ -596,19 +669,59 @@ local function handlePendingRoll(rollData)
         description = pendingRoll.description or "Physical Dice",
         dice = diceForMessage,
         modifier = modifier,
-        total = total,
+        total = finalTotal,
         tier = tier,
         tokenid = tokenid,
     }
     chat.SendCustom(visualMessage)
 
-    -- Change the roll to be the deterministic total
-    -- This way the C# engine calculates tiers correctly from our physical dice total
-    rollArgs.roll = tostring(total)
+    -- Set the deterministic roll value
+    rollArgs.roll = tostring(finalTotal)
     rollArgs.instant = true  -- No dice animation needed since we're using a fixed total
 
-    -- Now call dmhub.Roll with the modified args
-    -- This creates a proper C# rollInfo object with correct tier calculations
+    -- Set boons/banes on rollArgs (may be used by C# engine)
+    rollArgs.boons = edges
+    rollArgs.banes = banes
+
+    -- CRITICAL: Create/update multitargets for UI indicators
+    -- ActionLogPanel reads boons/banes from rollInfo.properties.multitargets[1]
+    rollArgs.properties = rollArgs.properties or {}
+    if not pendingRoll.multitargets or #pendingRoll.multitargets == 0 then
+        -- Standard test: create synthetic multitargets entry
+        rollArgs.properties.multitargets = {
+            {
+                boons = edges,
+                banes = banes,
+            }
+        }
+    else
+        -- Targeted roll: update existing multitargets
+        rollArgs.properties.multitargets = pendingRoll.multitargets
+        rollArgs.properties.multitargets[1].boons = edges
+        rollArgs.properties.multitargets[1].banes = banes
+    end
+
+    -- Override tier via complete callback for double edge/bane tier shifts
+    local originalComplete = rollArgs.complete
+    rollArgs.complete = function(rollInfo)
+        -- Only override for double edge/bane tier shifts
+        if (edges >= 2 and banes == 0) or (banes >= 2 and edges == 0) then
+            local calculatedTier = CalculateTierWithEdges(finalTotal, edges, banes)
+            local props = rollInfo.properties or {}
+
+            -- FIX: Use try_get instead of direct field access
+            if not props:try_get("overrideTier") then
+                props.overrideTier = calculatedTier
+                rollInfo:UploadProperties(props)
+            end
+        end
+
+        if originalComplete then
+            originalComplete(rollInfo)
+        end
+    end
+
+    -- Now call dmhub.Roll with multitargets injected and tier override callback
     dmhub.Roll(rollArgs)
 
     return true
@@ -645,12 +758,18 @@ RollDialog_BeforeRoll = function(context)
         return nil
     end
 
+    -- Split combined boons into separate edges/banes
+    local edges, banes = SplitBoons(context.boons)
+
     -- Store the roll context including the full rollArgs
     -- We'll modify rollArgs.roll and call dmhub.Roll when physical dice arrive
     DiceVision.pendingRoll = {
         rollArgs = context.rollArgs,  -- The full rollArgs object
         originalRoll = context.roll,   -- Store the original roll string for modifier extraction
         description = context.description,
+        edges = edges,                 -- Edge count (0, 1, or 2)
+        banes = banes,                 -- Bane count (0, 1, or 2)
+        multitargets = context.multitargets,  -- Store for boons/banes injection
     }
 
     DiceVision.waitingForRoll = true

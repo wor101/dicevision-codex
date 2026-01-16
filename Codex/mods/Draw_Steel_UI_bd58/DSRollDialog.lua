@@ -3219,6 +3219,7 @@ function GameHud.CreateRollDialog(self)
                         guid = rollArgs.guid,
                         modifiers = modifiersUsed,
                         multitargets = multitargetsUsed,
+                        boons = m_boons,  -- Edge/Bane state for DiceVision
                     })
                 end
 
