@@ -72,8 +72,13 @@ end
 local function extractModifierFromRoll(rollStr)
     -- Extract modifier from roll string (e.g., "2d10+5" -> 5, "2d10 + 2" -> 2, "2d10-2" -> -2)
     if not rollStr then return 0 end
-    -- Handle spaces around the operator: "2d10 + 2" or "2d10+2"
-    local sign, num = rollStr:match("([%+%-])%s*(%d+)%s*$")
+
+    -- Strip edge/bane suffix first: "2d10+2 1 edge" or "2d10+2 2 edges" -> "2d10+2"
+    local strippedStr = rollStr:gsub("%s+%d+%s+edges?%s*$", "")
+    strippedStr = strippedStr:gsub("%s+%d+%s+banes?%s*$", "")
+
+    -- Now extract modifier from end: "2d10+2" -> +2
+    local sign, num = strippedStr:match("([%+%-])%s*(%d+)%s*$")
     if sign and num then
         local modifier = tonumber(num) or 0
         if sign == "-" then
@@ -160,6 +165,30 @@ local function CalculateTierWithEdges(total, edges, banes)
     if tier < 1 then tier = 1 end
 
     return tier
+end
+
+-- Parse edge/bane from roll string (e.g., "2d10 1 edge" or "2d10 2 bane")
+-- Returns edges, banes counts
+-- This is a FALLBACK for when context.boons is 0 due to DSRollDialog's boonBar prepare reset
+local function ParseBoonsFromRollString(rollString)
+    if not rollString then return 0, 0 end
+
+    local edges = 0
+    local banes = 0
+
+    -- Look for "N edge" pattern (e.g., "2d10 1 edge" -> 1)
+    local edgeMatch = string.match(rollString, "(%d+)%s+edge")
+    if edgeMatch then
+        edges = tonumber(edgeMatch) or 0
+    end
+
+    -- Look for "N bane" pattern (e.g., "2d10 2 bane" -> 2)
+    local baneMatch = string.match(rollString, "(%d+)%s+bane")
+    if baneMatch then
+        banes = tonumber(baneMatch) or 0
+    end
+
+    return edges, banes
 end
 
 local function getTierRanges()
@@ -645,8 +674,14 @@ local function handlePendingRoll(rollData)
     -- Double edge/bane: 0 modifier (tier shift happens via callback injection)
     local edgeBaneMod = GetRollModFromEdgesAndBanes(edges, banes)
 
-    -- Final total: physical dice + character modifier + edge/bane modifier
-    local finalTotal = diceSum + modifier + edgeBaneMod
+    -- Check if this is a non-targeted roll (no multitargets)
+    local isNonTargeted = not pendingRoll.multitargets or #pendingRoll.multitargets == 0
+
+    -- Base total without edge/bane modifier (used for ApplyBoons approach)
+    local baseTotal = diceSum + modifier
+
+    -- Final total with edge/bane modifier (used for display and targeted rolls)
+    local finalTotal = baseTotal + edgeBaneMod
 
     -- Calculate tier for visual display (from final total)
     local tier = calculateTier(finalTotal)
@@ -676,26 +711,33 @@ local function handlePendingRoll(rollData)
     chat.SendCustom(visualMessage)
 
     -- Set the deterministic roll value
-    rollArgs.roll = tostring(finalTotal)
     rollArgs.instant = true  -- No dice animation needed since we're using a fixed total
 
-    -- Set boons/banes on rollArgs (may be used by C# engine)
-    rollArgs.boons = edges
-    rollArgs.banes = banes
-
-    -- CRITICAL: Create/update multitargets for UI indicators
-    -- ActionLogPanel reads boons/banes from rollInfo.properties.multitargets[1]
-    rollArgs.properties = rollArgs.properties or {}
-    if not pendingRoll.multitargets or #pendingRoll.multitargets == 0 then
-        -- Standard test: create synthetic multitargets entry
-        rollArgs.properties.multitargets = {
-            {
-                boons = edges,
-                banes = banes,
-            }
-        }
+    if isNonTargeted then
+        -- NON-TARGETED ROLL: Use GameSystem.ApplyBoons to embed boons in the roll string
+        -- This mirrors how DSRollDialog handles boons for non-targeted rolls
+        -- The engine will read boons from the parsed roll string
+        local boonsValue = edges - banes  -- Combined: -2 to +2
+        print("[DiceVision] Non-targeted roll detected. baseTotal:", baseTotal, "boonsValue:", boonsValue)
+        if boonsValue ~= 0 and GameSystem and GameSystem.ApplyBoons then
+            local rollWithBoons = GameSystem.ApplyBoons(tostring(baseTotal), boonsValue)
+            print("[DiceVision] GameSystem.ApplyBoons('" .. tostring(baseTotal) .. "', " .. boonsValue .. ") returned: '" .. tostring(rollWithBoons) .. "'")
+            rollArgs.roll = rollWithBoons
+        else
+            print("[DiceVision] No boons to apply or GameSystem.ApplyBoons not available, using finalTotal:", finalTotal)
+            rollArgs.roll = tostring(finalTotal)
+        end
+        -- Don't set rollArgs.boons/banes or synthetic multitargets - let engine handle from roll string
     else
-        -- Targeted roll: update existing multitargets
+        -- TARGETED ROLL: Use multitargets injection (existing approach)
+        rollArgs.roll = tostring(finalTotal)
+
+        -- Set boons/banes on rollArgs (may be used by C# engine)
+        rollArgs.boons = edges
+        rollArgs.banes = banes
+
+        -- Update multitargets for UI indicators
+        rollArgs.properties = rollArgs.properties or {}
         rollArgs.properties.multitargets = pendingRoll.multitargets
         rollArgs.properties.multitargets[1].boons = edges
         rollArgs.properties.multitargets[1].banes = banes
@@ -758,8 +800,23 @@ RollDialog_BeforeRoll = function(context)
         return nil
     end
 
+    -- DEBUG: Trace boons and roll values through the hook
+    print("[DiceVision] Hook received context.boons:", context.boons)
+    print("[DiceVision] Hook received context.roll:", context.roll)
+
     -- Split combined boons into separate edges/banes
     local edges, banes = SplitBoons(context.boons)
+    print("[DiceVision] After SplitBoons - edges:", edges, "banes:", banes)
+
+    -- FALLBACK: If context.boons is 0, try parsing from roll string
+    -- This handles the case where boonBar's prepare function reset m_boons to 0
+    -- but the boons are still embedded in the roll string via GameSystem.ApplyBoons
+    if edges == 0 and banes == 0 and context.roll then
+        edges, banes = ParseBoonsFromRollString(context.roll)
+        if edges > 0 or banes > 0 then
+            print("[DiceVision] Parsed boons from roll string - edges:", edges, "banes:", banes)
+        end
+    end
 
     -- Store the roll context including the full rollArgs
     -- We'll modify rollArgs.roll and call dmhub.Roll when physical dice arrive
