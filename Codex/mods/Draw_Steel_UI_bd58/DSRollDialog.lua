@@ -3155,32 +3155,6 @@ function GameHud.CreateRollDialog(self)
                     properties = rollProperties,
                     begin = function(rollInfo)
                         print("ROLL:: BEGIN", rollInfo, rollIsSilent, instant)
-                        -- DBG: Dump known rollInfo fields for DiceVision comparison
-                        -- Note: rollInfo is ChatMessageDiceRollInfoLua (C# object), not a Lua table
-                        print("DBG: ====== NORMAL ROLLINFO STRUCTURE ======")
-                        print("DBG: rollInfo type = " .. type(rollInfo))
-                        print("DBG: rollInfo.total = " .. tostring(rollInfo.total) .. " (type: " .. type(rollInfo.total) .. ")")
-                        print("DBG: rollInfo.naturalRoll = " .. tostring(rollInfo.naturalRoll) .. " (type: " .. type(rollInfo.naturalRoll) .. ")")
-                        print("DBG: rollInfo.tiers = " .. tostring(rollInfo.tiers) .. " (type: " .. type(rollInfo.tiers) .. ")")
-                        print("DBG: rollInfo.nat1 = " .. tostring(rollInfo.nat1) .. " (type: " .. type(rollInfo.nat1) .. ")")
-                        print("DBG: rollInfo.nat20 = " .. tostring(rollInfo.nat20) .. " (type: " .. type(rollInfo.nat20) .. ")")
-                        print("DBG: rollInfo.isComplete = " .. tostring(rollInfo.isComplete) .. " (type: " .. type(rollInfo.isComplete) .. ")")
-                        print("DBG: rollInfo.waitingOnDice = " .. tostring(rollInfo.waitingOnDice) .. " (type: " .. type(rollInfo.waitingOnDice) .. ")")
-                        print("DBG: rollInfo.advantage = " .. tostring(rollInfo.advantage) .. " (type: " .. type(rollInfo.advantage) .. ")")
-                        print("DBG: rollInfo.disadvantage = " .. tostring(rollInfo.disadvantage) .. " (type: " .. type(rollInfo.disadvantage) .. ")")
-                        print("DBG: rollInfo.boons = " .. tostring(rollInfo.boons) .. " (type: " .. type(rollInfo.boons) .. ")")
-                        print("DBG: rollInfo.banes = " .. tostring(rollInfo.banes) .. " (type: " .. type(rollInfo.banes) .. ")")
-                        print("DBG: rollInfo.rolls = " .. tostring(rollInfo.rolls) .. " (type: " .. type(rollInfo.rolls) .. ")")
-                        print("DBG: rollInfo.description = " .. tostring(rollInfo.description) .. " (type: " .. type(rollInfo.description) .. ")")
-                        print("DBG: rollInfo.properties = " .. tostring(rollInfo.properties) .. " (type: " .. type(rollInfo.properties) .. ")")
-                        print("DBG: rollInfo.categories = " .. tostring(rollInfo.categories) .. " (type: " .. type(rollInfo.categories) .. ")")
-                        print("DBG: rollInfo.resultInfo = " .. tostring(rollInfo.resultInfo) .. " (type: " .. type(rollInfo.resultInfo) .. ")")
-                        print("DBG: rollInfo.token = " .. tostring(rollInfo.token) .. " (type: " .. type(rollInfo.token) .. ")")
-                        print("DBG: rollInfo.autocrit = " .. tostring(rollInfo.autocrit) .. " (type: " .. type(rollInfo.autocrit) .. ")")
-                        print("DBG: rollInfo.forcedResult = " .. tostring(rollInfo.forcedResult) .. " (type: " .. type(rollInfo.forcedResult) .. ")")
-                        print("DBG: rollInfo.autosuccess = " .. tostring(rollInfo.autosuccess) .. " (type: " .. type(rollInfo.autosuccess) .. ")")
-                        print("DBG: rollInfo.autofailure = " .. tostring(rollInfo.autofailure) .. " (type: " .. type(rollInfo.autofailure) .. ")")
-                        print("DBG: ====== END ROLLINFO ======")
                         m_rollInfo = rollInfo
                         if beginRollFn ~= nil then
                             beginRollFn(rollInfo)
@@ -3227,12 +3201,11 @@ function GameHud.CreateRollDialog(self)
                 g_activeRollArgs = rollArgs
 
                 -- Hook for external mods to intercept rolls (e.g., DiceVision physical dice)
-                -- If RollDialog_BeforeRoll is defined and returns true, the roll is handled externally
-                print("DBG: DSRollDialog submit - checking for RollDialog_BeforeRoll hook")
-                print("DBG: RollDialog_BeforeRoll type: " .. type(RollDialog_BeforeRoll))
+                -- Returns "intercept" if the mod wants to handle the roll itself
+                -- In that case, we skip dmhub.Roll - the mod will call it later with modified args
+                local hookResult = nil
                 if RollDialog_BeforeRoll then
-                    print("DBG: DSRollDialog - calling RollDialog_BeforeRoll hook")
-                    local handled = RollDialog_BeforeRoll({
+                    hookResult = RollDialog_BeforeRoll({
                         rollArgs = rollArgs,
                         roll = rollArgs.roll,
                         description = rollArgs.description,
@@ -3244,38 +3217,15 @@ function GameHud.CreateRollDialog(self)
                         silent = rollArgs.silent,
                         delay = rollArgs.delay,
                         guid = rollArgs.guid,
-                        beginRoll = rollArgs.begin,
-                        completeRoll = function(rollInfo)
-                            m_rollInfo = rollInfo
-                            completeFunction(rollInfo)
-                        end,
                         modifiers = modifiersUsed,
                         multitargets = multitargetsUsed,
-                        -- Dialog control functions for external mods
-                        showResults = function(rollInfo)
-                            print("DBG: DSRollDialog showResults called")
-                            m_rollInfo = rollInfo
-                            resultPanel:SetClassTree("rolling", false)
-                            resultPanel:SetClassTree("finishedRolling", true)
-                            resultPanel:FireEventTree("beginRoll", rollInfo, resultPanel.data.rollid)
-                        end,
-                        setupAcceptButton = function(onAccept)
-                            print("DBG: DSRollDialog setupAcceptButton called")
-                            proceedAfterRollButton.events.press = function()
-                                print("DBG: DSRollDialog Accept button pressed")
-                                resultPanel:SetClass('hidden', true)
-                                RelinquishPanel()
-                                onAccept()
-                            end
-                        end,
+                        boons = m_boons,  -- Edge/Bane state for DiceVision
                     })
-                    if handled then
-                        print("DBG: DSRollDialog - roll handled by external mod, keeping dialog open")
-                        resultPanel:SetClassTree("rolling", true)
-                        resultPanel:SetClassTree("finishedRolling", false)
-                        chat.PreviewChat('')
-                        return
-                    end
+                end
+
+                -- If hook returns "intercept", the mod will handle calling dmhub.Roll
+                if hookResult == "intercept" then
+                    return
                 end
 
                 activeRoll = dmhub.Roll(rollArgs)
