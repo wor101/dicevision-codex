@@ -755,10 +755,12 @@ local function handlePendingRoll(rollData)
         rollArgs.banes = banes
 
         -- Update multitargets for UI indicators
+        -- NOTE: multitargets.boons/banes are ADDITIONAL to base roll, not total
+        -- Since edges/banes are already on rollArgs.boons/banes, set to 0 here
         rollArgs.properties = rollArgs.properties or {}
         rollArgs.properties.multitargets = pendingRoll.multitargets
-        rollArgs.properties.multitargets[1].boons = edges
-        rollArgs.properties.multitargets[1].banes = banes
+        rollArgs.properties.multitargets[1].boons = 0
+        rollArgs.properties.multitargets[1].banes = 0
     end
 
     -- Override tier via complete callback for double edge/bane tier shifts
