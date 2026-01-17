@@ -746,8 +746,9 @@ local function handlePendingRoll(rollData)
         end
         -- Don't set rollArgs.boons/banes or synthetic multitargets - let engine handle from roll string
     else
-        -- TARGETED ROLL: Use multitargets injection (existing approach)
-        rollArgs.roll = tostring(finalTotal)
+        -- TARGETED ROLL: Pass baseTotal, let Codex apply edge/bane modifier
+        -- Codex's BoonsAndBanesToMod() will add the +2/-2 based on boons/banes
+        rollArgs.roll = tostring(baseTotal)
 
         -- Set boons/banes on rollArgs (may be used by C# engine)
         rollArgs.boons = edges
