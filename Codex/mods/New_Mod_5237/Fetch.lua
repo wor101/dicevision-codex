@@ -50,11 +50,20 @@ local DiceVision = {
     waitingForRoll = false,
     rollTimeout = 30000,  -- 30 second timeout
     rollStartTime = 0,
+
+    -- Request ID for polling (prevents race condition with continuous mode)
+    currentRequestId = nil,
 }
 
 -- ============================================================================
 -- Utility Functions
 -- ============================================================================
+
+local function generateRequestId()
+    -- Generate unique ID (timestamp + random suffix) for tracking poll requests
+    -- This prevents the race condition where continuous mode re-triggers after a roll is captured
+    return tostring(os.time()) .. "-" .. tostring(math.random(1000, 9999))
+end
 
 local function formatDice(dice)
     local parts = {}
@@ -530,6 +539,12 @@ local function pollForRolls(callback)
         pollMode
     )
 
+    -- Include request_id when in waiting mode to prevent race condition
+    -- The backend tracks fulfilled request IDs and won't re-trigger waiting for them
+    if pollMode == "waiting" and DiceVision.currentRequestId then
+        url = url .. "&request_id=" .. DiceVision.currentRequestId
+    end
+
     net.Get{
         url = url,
         success = function(data)
@@ -648,6 +663,8 @@ local function handlePendingRoll(rollData)
     local pendingRoll = DiceVision.pendingRoll
     DiceVision.pendingRoll = nil
     DiceVision.waitingForRoll = false
+    -- Generate new request ID for next await cycle (old one is now marked as fulfilled on backend)
+    DiceVision.currentRequestId = generateRequestId()
     hideWaitingDialog()
 
     -- Calculate values from physical dice
@@ -777,6 +794,8 @@ local function checkRollTimeout()
             chat.Send("[DiceVision] Timeout waiting for physical dice. Roll cancelled - try again.")
             DiceVision.waitingForRoll = false
             DiceVision.pendingRoll = nil
+            -- Generate new request ID for next await cycle
+            DiceVision.currentRequestId = generateRequestId()
             hideWaitingDialog()
         end
     end
@@ -831,6 +850,7 @@ RollDialog_BeforeRoll = function(context)
 
     DiceVision.waitingForRoll = true
     DiceVision.rollStartTime = dmhub.Time() * 1000
+    DiceVision.currentRequestId = generateRequestId()
 
     showWaitingDialog()
     chat.Send("[DiceVision] Waiting for physical dice...")
@@ -847,6 +867,7 @@ removeRollInterceptor = function()
     -- Clear any pending state when switching modes
     DiceVision.pendingRoll = nil
     DiceVision.waitingForRoll = false
+    DiceVision.currentRequestId = nil
 end
 
 -- ============================================================================
