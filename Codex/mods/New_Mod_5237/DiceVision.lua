@@ -72,6 +72,9 @@ DiceVision.rules = {
     -- Dice selection override (nil = auto-detect from roll context)
     -- Example: {keep = "highest", count = 2}
     diceSelection = nil,
+
+    -- Clamp values outside 0-10 range to 1 (for misread dice)
+    clampOutOfRange = false,
 }
 
 -- Apply default rules on load
@@ -261,6 +264,32 @@ local function applyValueMappings(dice, mappings)
     return result
 end
 
+-- Clamp values outside 0-10 range to 1 (for misread dice)
+local function clampOutOfRangeValues(dice, isEnabled)
+    if not isEnabled then
+        return dice
+    end
+
+    local result = {}
+    for i, die in ipairs(dice) do
+        local value = die.value
+        local clamped = value
+
+        -- Values outside 0-10 range become 1
+        if value < 0 or value > 10 then
+            clamped = 1
+            print(string.format("[DiceVision] Clamped %s value %d -> 1 (out of 0-10 range)", die.type, value))
+        end
+
+        result[i] = {
+            type = die.type,
+            value = clamped,
+            originalValue = (clamped ~= value) and value or die.originalValue,
+        }
+    end
+    return result
+end
+
 -- Apply dice selection (keep highest/lowest N)
 local function applyDiceSelection(dice, selection)
     if not selection or not selection.count then
@@ -339,10 +368,13 @@ local function applyDiceRules(dice, pendingRoll)
     local processed = dice
     local droppedDice = nil
 
-    -- 1. Apply value mappings first
+    -- 1. Apply out-of-range clamping first (before value mappings)
+    processed = clampOutOfRangeValues(processed, DiceVision.rules.clampOutOfRange)
+
+    -- 2. Apply value mappings (e.g., d10 0 -> 10)
     processed = applyValueMappings(processed, rules.valueMappings)
 
-    -- 2. Apply dice selection (keep N)
+    -- 3. Apply dice selection (keep N)
     if rules.diceSelection then
         local sorted
         processed, sorted = applyDiceSelection(processed, rules.diceSelection)
@@ -1119,7 +1151,10 @@ Commands.dv = function(args)
 
             -- Show dice selection
             msg = msg .. "  Dice selection: " .. (DiceVision.rules.diceSelection and
-                string.format("keep %s %d", DiceVision.rules.diceSelection.keep, DiceVision.rules.diceSelection.count) or "auto-detect")
+                string.format("keep %s %d", DiceVision.rules.diceSelection.keep, DiceVision.rules.diceSelection.count) or "auto-detect") .. "\n"
+
+            -- Show clamping status
+            msg = msg .. "  Out-of-range clamping: " .. (DiceVision.rules.clampOutOfRange and "enabled" or "disabled")
             chat.Send(msg)
 
         elseif action == "map" then
@@ -1151,16 +1186,30 @@ Commands.dv = function(args)
                 chat.Send("[DiceVision] Usage: /dv rules keep <highest|lowest|auto> [count]")
             end
 
+        elseif action == "clamp" then
+            local mode = parts[3]
+
+            if mode == "on" then
+                DiceVision.rules.clampOutOfRange = true
+                chat.Send("[DiceVision] Out-of-range clamping enabled (values outside 0-10 -> 1)")
+            elseif mode == "off" then
+                DiceVision.rules.clampOutOfRange = false
+                chat.Send("[DiceVision] Out-of-range clamping disabled")
+            else
+                local status = DiceVision.rules.clampOutOfRange and "enabled" or "disabled"
+                chat.Send("[DiceVision] Out-of-range clamping: " .. status .. "\nUsage: /dv rules clamp <on|off>")
+            end
+
         elseif action == "clear" then
             local clearAll = parts[3] == "all"
 
             if clearAll then
                 -- Full clear - no rules at all
-                DiceVision.rules = {valueMappings = {}, diceSelection = nil}
+                DiceVision.rules = {valueMappings = {}, diceSelection = nil, clampOutOfRange = false}
                 chat.Send("[DiceVision] All rules cleared (including defaults)")
             else
                 -- Restore defaults
-                DiceVision.rules = {valueMappings = {}, diceSelection = nil}
+                DiceVision.rules = {valueMappings = {}, diceSelection = nil, clampOutOfRange = false}
                 for dieType, mappings in pairs(DEFAULT_RULES.valueMappings) do
                     DiceVision.rules.valueMappings[dieType] = {}
                     for from, to in pairs(mappings) do
@@ -1177,6 +1226,7 @@ Commands.dv = function(args)
   /dv rules map <die> <from> <to>   - Map die value (e.g., /dv rules map d10 0 10)
   /dv rules keep <mode> <count>     - Keep highest/lowest N dice
   /dv rules keep auto               - Auto-detect from roll context
+  /dv rules clamp <on|off>          - Clamp values outside 0-10 to 1
   /dv rules clear                   - Reset rules to defaults
   /dv rules clear all               - Clear all rules (including defaults)
 ]])

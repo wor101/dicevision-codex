@@ -44,7 +44,32 @@ This mod is installed through Codex's built-in mod manager:
 | `/dv status` | Show connection status |
 | `/dv mode <off\|chat\|replace>` | Set operation mode |
 | `/dv test` | Test API connection |
+| `/dv rules` | Configure dice processing rules |
 | `/dv help` | Show available commands |
+
+## Dice Rules
+
+DiceVision includes a rules system for processing physical dice values:
+
+### Rules Commands
+
+| Command | Description |
+|---------|-------------|
+| `/dv rules show` | Show current rules |
+| `/dv rules map <die> <from> <to>` | Map die value (e.g., `/dv rules map d10 0 10`) |
+| `/dv rules keep <highest\|lowest> <count>` | Keep highest/lowest N dice |
+| `/dv rules keep auto` | Auto-detect from roll context |
+| `/dv rules clamp <on\|off>` | Clamp values outside 0-10 to 1 |
+| `/dv rules clear` | Reset rules to defaults |
+| `/dv rules clear all` | Clear all rules (including defaults) |
+
+### Default Rules
+
+- **d10 value mapping**: 0 → 10 (standard d10 behavior where 0 reads as 10)
+
+### Value Clamping
+
+When enabled with `/dv rules clamp on`, any dice value outside the 0-10 range is clamped to 1. This helps handle misread dice where DiceVision might return an invalid value like 14 or -3.
 
 ## Operating Modes
 
