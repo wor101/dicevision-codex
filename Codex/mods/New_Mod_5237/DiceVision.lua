@@ -145,6 +145,40 @@ local function calculateTier(total)
     end
 end
 
+-- Format a plain text roll message for cross-player compatibility
+-- Uses chat.Send() instead of custom message types to avoid crashes for players without the mod
+local function formatPlainTextRollMessage(dice, modifier, total, tier, description)
+    -- Build dice string: "d10(7) + d10(5)"
+    local diceParts = {}
+    for _, die in ipairs(dice) do
+        local faceStr = "d" .. tostring(die.faces)
+        local valueStr = tostring(die.value)
+        if die.originalValue and die.originalValue ~= die.value then
+            valueStr = valueStr .. "<-" .. tostring(die.originalValue)
+        end
+        table.insert(diceParts, faceStr .. "(" .. valueStr .. ")")
+    end
+    local diceStr = table.concat(diceParts, " + ")
+
+    -- Add modifier if present
+    if modifier and modifier ~= 0 then
+        if modifier > 0 then
+            diceStr = diceStr .. " + " .. tostring(modifier)
+        else
+            diceStr = diceStr .. " - " .. tostring(math.abs(modifier))
+        end
+    end
+
+    -- Format tier result
+    local tierText = ""
+    if tier then
+        tierText = " (Tier " .. tostring(tier) .. ")"
+    end
+
+    return string.format("[Physical Dice] %s: %s = %d%s",
+        description or "Roll", diceStr, total, tierText)
+end
+
 -- Split combined m_boons (-2 to +2) into separate edge/bane counts
 local function SplitBoons(combinedBoons)
     combinedBoons = combinedBoons or 0
@@ -395,8 +429,27 @@ local function applyDiceRules(dice, pendingRoll)
 end
 
 -- ============================================================================
--- Custom Chat Message for Physical Dice Rolls
+-- Custom Chat Message for Physical Dice Rolls (DISABLED)
 -- ============================================================================
+--[[
+    DISABLED: Custom message types cause crashes for players without the mod.
+    When a player with DiceVision sends a DiceVisionRollMessage, players without
+    the mod get: "Attempt to read unknown field Render in type DiceVisionRollMessage"
+
+    Currently using plain text via chat.Send() instead (see formatPlainTextRollMessage).
+
+    TODO: Investigate solutions:
+    - Check if recipient has mod before sending custom message
+    - Use a fallback rendering mechanism
+    - Implement a shared message type that Codex handles gracefully
+
+    To re-enable: Change ENABLE_CUSTOM_ROLL_MESSAGE to true and update the
+    chat.Send() calls back to chat.SendCustom() in postRollToChat() and handlePendingRoll()
+]]
+
+local ENABLE_CUSTOM_ROLL_MESSAGE = false
+
+if ENABLE_CUSTOM_ROLL_MESSAGE then
 
 DiceVisionRollMessage = RegisterGameType("DiceVisionRollMessage")
 
@@ -575,6 +628,8 @@ function DiceVisionRollMessage.Render(self, message)
     }
 end
 
+end -- if ENABLE_CUSTOM_ROLL_MESSAGE
+
 -- ============================================================================
 -- API Communication
 -- ============================================================================
@@ -697,16 +752,9 @@ local function postRollToChat(rollData)
     -- Calculate tier from total
     local tier = calculateTier(total)
 
-    -- Create and send the custom chat message
-    local message = DiceVisionRollMessage.new{
-        description = "Physical Dice Roll",
-        dice = diceForMessage,
-        modifier = 0,  -- No modifier in chat-only mode
-        total = total,
-        tier = tier,
-    }
-
-    chat.SendCustom(message)
+    -- Send plain text message (compatible with all players, even without the mod)
+    local plainText = formatPlainTextRollMessage(diceForMessage, 0, total, tier, "Physical Dice Roll")
+    chat.Send(plainText)
 
     print(string.format("DBG: DiceVision roll posted to chat: total=%d, tier=%d", total, tier))
 end
@@ -723,39 +771,6 @@ end
 
 local function hideWaitingDialog()
     -- TODO: Hide the waiting indicator
-end
-
--- Helper function to post roll result to chat
-local function postDiceVisionRollToChat(rollData, rollInfo, pendingRoll)
-    -- Convert dice data for chat message display
-    -- API: {type: "d10", value: 7} -> Message: {faces: 10, value: 7}
-    local diceForMessage = {}
-    for _, die in ipairs(rollData.dice) do
-        local faces = getDiceFaces(die.type)
-        diceForMessage[#diceForMessage + 1] = {
-            faces = faces,
-            value = die.value
-        }
-    end
-
-    -- Get token ID for chat message
-    local tokenid = pendingRoll.tokenid
-    if not tokenid and pendingRoll.creature then
-        tokenid = dmhub.LookupTokenId(pendingRoll.creature)
-    end
-
-    -- Create and send the custom chat message
-    local modifier = extractModifierFromRoll(pendingRoll.roll)
-    local message = DiceVisionRollMessage.new{
-        description = pendingRoll.description or "Roll",
-        dice = diceForMessage,
-        modifier = modifier,
-        total = rollInfo.total,
-        tier = rollInfo.tiers,
-        tokenid = tokenid,
-    }
-
-    chat.SendCustom(message)
 end
 
 local function handlePendingRoll(rollData)
@@ -832,15 +847,10 @@ local function handlePendingRoll(rollData)
         tokenid = dmhub.LookupTokenId(rollArgs.creature)
     end
 
-    -- Create visual dice display message (sent in complete callback to ensure correct ordering)
-    local visualMessage = DiceVisionRollMessage.new{
-        description = pendingRoll.description or "Physical Dice",
-        dice = diceForMessage,
-        modifier = modifier,
-        total = finalTotal,
-        tier = tier,
-        tokenid = tokenid,
-    }
+    -- Create plain text message (sent in complete callback to ensure correct ordering)
+    -- Uses plain text for cross-player compatibility (players without the mod won't crash)
+    local visualMessage = formatPlainTextRollMessage(diceForMessage, modifier, finalTotal, tier, pendingRoll.description or "Physical Dice")
+
     -- Set the deterministic roll value
     rollArgs.instant = true  -- No dice animation needed since we're using a fixed total
 
@@ -893,7 +903,7 @@ local function handlePendingRoll(rollData)
         end
 
         -- Send visual dice display AFTER roll is processed (so character token appears first)
-        chat.SendCustom(visualMessage)
+        chat.Send(visualMessage)
 
         if originalComplete then
             originalComplete(rollInfo)
