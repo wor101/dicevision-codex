@@ -620,7 +620,7 @@ local function handlePendingRoll(rollData)
         tokenid = dmhub.LookupTokenId(rollArgs.creature)
     end
 
-    -- Send visual dice display to chat (shows dice icons with individual values)
+    -- Create visual dice display message (sent in complete callback to ensure correct ordering)
     local visualMessage = DiceVisionRollMessage.new{
         description = pendingRoll.description or "Physical Dice",
         dice = diceForMessage,
@@ -629,8 +629,6 @@ local function handlePendingRoll(rollData)
         tier = tier,
         tokenid = tokenid,
     }
-    chat.SendCustom(visualMessage)
-
     -- Set the deterministic roll value
     rollArgs.instant = true  -- No dice animation needed since we're using a fixed total
 
@@ -681,6 +679,9 @@ local function handlePendingRoll(rollData)
                 rollInfo:UploadProperties(props)
             end
         end
+
+        -- Send visual dice display AFTER roll is processed (so character token appears first)
+        chat.SendCustom(visualMessage)
 
         if originalComplete then
             originalComplete(rollInfo)
