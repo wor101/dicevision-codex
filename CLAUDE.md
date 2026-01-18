@@ -37,6 +37,6 @@ This repository contains a mod that integrates physical dice recognition (DiceVi
 - `/dv mode <off|chat|replace>` - Set operation mode
 
 ## Common Tasks
-- **Debugging roll issues**: Check `handlePendingRoll()` in DiceVision.lua (lines 658-790)
+- **Debugging roll issues**: Check `handlePendingRoll()` in DiceVision.lua (lines 562-694)
 - **Edge/bane problems**: Two code paths exist - targeted vs non-targeted rolls
-- **API issues**: Check polling logic (lines 527-571, 880-921)
+- **API issues**: Check polling logic (lines 431-475, 784-825)

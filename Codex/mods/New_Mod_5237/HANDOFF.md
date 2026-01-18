@@ -231,7 +231,6 @@ Custom chat panel rendering physical dice with icons:
 1. Action Log shows total rather than individual dice values (visual panel compensates)
 2. Requires active DiceVision API connection
 3. Only works with Draw Steel roll dialogs (DSRollDialog.lua)
-4. `constructRollInfo()` function (lines 216-306) exists but is currently unused - was from earlier approach
 
 ---
 
