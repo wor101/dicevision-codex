@@ -55,6 +55,36 @@ local DiceVision = {
     currentRequestId = nil,
 }
 
+-- Default dice rules (applied on load and after "rules clear")
+local DEFAULT_RULES = {
+    valueMappings = {
+        ["d10"] = {[0] = 10},  -- Standard d10: 0 reads as 10
+    },
+    diceSelection = nil,
+}
+
+-- Dice rule configuration (initialized from defaults)
+DiceVision.rules = {
+    -- Value mappings: {dieType = {fromValue = toValue}}
+    -- Example: {["d10"] = {[1] = 0}} makes 1s count as 0
+    valueMappings = {},
+
+    -- Dice selection override (nil = auto-detect from roll context)
+    -- Example: {keep = "highest", count = 2}
+    diceSelection = nil,
+
+    -- Clamp values outside 0-10 range to 1 (for misread dice)
+    clampOutOfRange = false,
+}
+
+-- Apply default rules on load
+for dieType, mappings in pairs(DEFAULT_RULES.valueMappings) do
+    DiceVision.rules.valueMappings[dieType] = {}
+    for from, to in pairs(mappings) do
+        DiceVision.rules.valueMappings[dieType][from] = to
+    end
+end
+
 -- ============================================================================
 -- Utility Functions
 -- ============================================================================
@@ -207,6 +237,161 @@ local function getTierRanges()
         { tier = 2, label = "12-16", min = 12, max = 16 },
         { tier = 3, label = "17+", min = 17, max = nil },
     }
+end
+
+-- ============================================================================
+-- Dice Rule Processing
+-- ============================================================================
+
+-- Apply value mappings to dice
+local function applyValueMappings(dice, mappings)
+    if not mappings or next(mappings) == nil then
+        return dice
+    end
+
+    local result = {}
+    for i, die in ipairs(dice) do
+        local dieType = die.type
+        local typeMapping = mappings[dieType] or mappings["*"] or {}
+        local newValue = typeMapping[die.value] or die.value
+
+        result[i] = {
+            type = die.type,
+            value = newValue,
+            originalValue = (newValue ~= die.value) and die.value or nil,
+        }
+    end
+    return result
+end
+
+-- Clamp values outside 0-10 range to 1 (for misread dice)
+local function clampOutOfRangeValues(dice, isEnabled)
+    if not isEnabled then
+        return dice
+    end
+
+    local result = {}
+    for i, die in ipairs(dice) do
+        local value = die.value
+        local clamped = value
+
+        -- Values outside 0-10 range become 1
+        if value < 0 or value > 10 then
+            clamped = 1
+            print(string.format("[DiceVision] Clamped %s value %d -> 1 (out of 0-10 range)", die.type, value))
+        end
+
+        result[i] = {
+            type = die.type,
+            value = clamped,
+            originalValue = (clamped ~= value) and value or die.originalValue,
+        }
+    end
+    return result
+end
+
+-- Apply dice selection (keep highest/lowest N)
+local function applyDiceSelection(dice, selection)
+    if not selection or not selection.count then
+        return dice
+    end
+
+    -- Copy and sort dice
+    local sorted = {}
+    for i, die in ipairs(dice) do
+        sorted[i] = {die = die, index = i}
+    end
+
+    if selection.keep == "highest" then
+        table.sort(sorted, function(a, b) return a.die.value > b.die.value end)
+    elseif selection.keep == "lowest" then
+        table.sort(sorted, function(a, b) return a.die.value < b.die.value end)
+    end
+
+    -- Keep only the specified count
+    local result = {}
+    local count = math.min(selection.count, #sorted)
+    for i = 1, count do
+        result[i] = sorted[i].die
+    end
+
+    return result, sorted  -- Return sorted for display purposes
+end
+
+-- Detect dice selection from roll context (numKeep)
+local function detectDiceSelection(pendingRoll)
+    if not pendingRoll or not pendingRoll.originalRoll then
+        return nil
+    end
+
+    -- Parse the roll string to check for numKeep
+    local creature = pendingRoll.rollArgs and pendingRoll.rollArgs.creature
+    local rollInfo = dmhub.ParseRoll(pendingRoll.originalRoll, creature)
+
+    if rollInfo and rollInfo.categories then
+        for catName, category in pairs(rollInfo.categories) do
+            if category.groups then
+                for _, group in ipairs(category.groups) do
+                    if group.numKeep and group.numKeep > 0 and group.numDice and group.numDice > group.numKeep then
+                        return {
+                            keep = "highest",  -- Codex convention: numKeep means keep highest
+                            count = group.numKeep,
+                            total = group.numDice,
+                        }
+                    end
+                end
+            end
+        end
+    end
+
+    return nil
+end
+
+-- Get effective rules for a roll (merges config with auto-detection)
+local function getEffectiveRules(pendingRoll)
+    local rules = {
+        valueMappings = DiceVision.rules.valueMappings or {},
+        diceSelection = DiceVision.rules.diceSelection,  -- Manual override
+    }
+
+    -- Auto-detect dice selection from roll context if not manually set
+    if not rules.diceSelection then
+        rules.diceSelection = detectDiceSelection(pendingRoll)
+    end
+
+    return rules
+end
+
+-- Main function to apply all dice rules
+local function applyDiceRules(dice, pendingRoll)
+    local rules = getEffectiveRules(pendingRoll)
+    local processed = dice
+    local droppedDice = nil
+
+    -- 1. Apply out-of-range clamping first (before value mappings)
+    processed = clampOutOfRangeValues(processed, DiceVision.rules.clampOutOfRange)
+
+    -- 2. Apply value mappings (e.g., d10 0 -> 10)
+    processed = applyValueMappings(processed, rules.valueMappings)
+
+    -- 3. Apply dice selection (keep N)
+    if rules.diceSelection then
+        local sorted
+        processed, sorted = applyDiceSelection(processed, rules.diceSelection)
+
+        -- Track which dice were dropped for visual display
+        if sorted and #sorted > #processed then
+            droppedDice = {}
+            for i = #processed + 1, #sorted do
+                droppedDice[#droppedDice + 1] = sorted[i].die
+            end
+        end
+
+        print(string.format("[DiceVision] Dice selection: keep %s %d of %d",
+            rules.diceSelection.keep, rules.diceSelection.count, #dice))
+    end
+
+    return processed, droppedDice
 end
 
 -- ============================================================================
@@ -479,21 +664,35 @@ end
 -- ============================================================================
 
 local function postRollToChat(rollData)
+    -- Apply dice rules (value mappings, keep highest/lowest)
+    -- Note: No pendingRoll context, so only manual rules apply (no auto-detect)
+    local processedDice, droppedDice = applyDiceRules(rollData.dice, nil)
+
     -- Convert dice data from API format to message format
     -- API: {type: "d10", value: 7} -> Message: {faces: 10, value: 7}
     local diceForMessage = {}
     local diceSum = 0
-    for _, die in ipairs(rollData.dice) do
+    for _, die in ipairs(processedDice) do
         local faces = getDiceFaces(die.type)
         diceForMessage[#diceForMessage + 1] = {
             faces = faces,
-            value = die.value
+            value = die.value,
+            originalValue = die.originalValue,
         }
         diceSum = diceSum + die.value
     end
 
-    -- Use the total from the API if provided, otherwise use dice sum
-    local total = rollData.total or diceSum
+    -- Log dropped dice if any
+    if droppedDice and #droppedDice > 0 then
+        local droppedValues = {}
+        for _, die in ipairs(droppedDice) do
+            droppedValues[#droppedValues + 1] = tostring(die.value)
+        end
+        print("[DiceVision] Dropped dice: " .. table.concat(droppedValues, ", "))
+    end
+
+    -- Use dice sum (NOT rollData.total which is unprocessed)
+    local total = diceSum
 
     -- Calculate tier from total
     local tier = calculateTier(total)
@@ -575,15 +774,28 @@ local function handlePendingRoll(rollData)
     local modifier = extractModifierFromRoll(pendingRoll.originalRoll)
     local diceSum = 0
 
+    -- Apply dice rules (value mappings, keep highest/lowest)
+    local processedDice, droppedDice = applyDiceRules(rollData.dice, pendingRoll)
+
     -- Build dice info for visual display
     local diceForMessage = {}
-    for i, die in ipairs(rollData.dice) do
+    for i, die in ipairs(processedDice) do
         local faces = getDiceFaces(die.type)
         diceSum = diceSum + die.value
         diceForMessage[i] = {
             faces = faces,
             value = die.value,
+            originalValue = die.originalValue,  -- For showing remapped values
         }
+    end
+
+    -- Log dropped dice if any
+    if droppedDice and #droppedDice > 0 then
+        local droppedValues = {}
+        for _, die in ipairs(droppedDice) do
+            droppedValues[#droppedValues + 1] = tostring(die.value)
+        end
+        print("[DiceVision] Dropped dice: " .. table.concat(droppedValues, ", "))
     end
 
     -- Get edge/bane counts (stored separately in hook)
@@ -919,6 +1131,107 @@ Commands.dv = function(args)
             end,
         }
 
+    elseif subcommand == "rules" then
+        local action = parts[2]
+
+        if action == "show" then
+            local msg = "[DiceVision] Current rules:\n"
+
+            -- Show value mappings in detail
+            if next(DiceVision.rules.valueMappings) then
+                msg = msg .. "  Value mappings:\n"
+                for dieType, mappings in pairs(DiceVision.rules.valueMappings) do
+                    for from, to in pairs(mappings) do
+                        msg = msg .. string.format("    %s: %d -> %d\n", dieType, from, to)
+                    end
+                end
+            else
+                msg = msg .. "  Value mappings: none\n"
+            end
+
+            -- Show dice selection
+            msg = msg .. "  Dice selection: " .. (DiceVision.rules.diceSelection and
+                string.format("keep %s %d", DiceVision.rules.diceSelection.keep, DiceVision.rules.diceSelection.count) or "auto-detect") .. "\n"
+
+            -- Show clamping status
+            msg = msg .. "  Out-of-range clamping: " .. (DiceVision.rules.clampOutOfRange and "enabled" or "disabled")
+            chat.Send(msg)
+
+        elseif action == "map" then
+            -- /dv rules map d10 1 0  (map d10 value 1 to 0)
+            local dieType = parts[3]
+            local fromVal = tonumber(parts[4])
+            local toVal = tonumber(parts[5])
+
+            if dieType and fromVal and toVal then
+                DiceVision.rules.valueMappings[dieType] = DiceVision.rules.valueMappings[dieType] or {}
+                DiceVision.rules.valueMappings[dieType][fromVal] = toVal
+                chat.Send(string.format("[DiceVision] Mapped %s: %d -> %d", dieType, fromVal, toVal))
+            else
+                chat.Send("[DiceVision] Usage: /dv rules map <dieType> <fromValue> <toValue>")
+            end
+
+        elseif action == "keep" then
+            -- /dv rules keep highest 2
+            local mode = parts[3]
+            local count = tonumber(parts[4])
+
+            if mode == "auto" or mode == "clear" then
+                DiceVision.rules.diceSelection = nil
+                chat.Send("[DiceVision] Dice selection: auto-detect from roll context")
+            elseif mode and count then
+                DiceVision.rules.diceSelection = {keep = mode, count = count}
+                chat.Send(string.format("[DiceVision] Dice selection: keep %s %d", mode, count))
+            else
+                chat.Send("[DiceVision] Usage: /dv rules keep <highest|lowest|auto> [count]")
+            end
+
+        elseif action == "clamp" then
+            local mode = parts[3]
+
+            if mode == "on" then
+                DiceVision.rules.clampOutOfRange = true
+                chat.Send("[DiceVision] Out-of-range clamping enabled (values outside 0-10 -> 1)")
+            elseif mode == "off" then
+                DiceVision.rules.clampOutOfRange = false
+                chat.Send("[DiceVision] Out-of-range clamping disabled")
+            else
+                local status = DiceVision.rules.clampOutOfRange and "enabled" or "disabled"
+                chat.Send("[DiceVision] Out-of-range clamping: " .. status .. "\nUsage: /dv rules clamp <on|off>")
+            end
+
+        elseif action == "clear" then
+            local clearAll = parts[3] == "all"
+
+            if clearAll then
+                -- Full clear - no rules at all
+                DiceVision.rules = {valueMappings = {}, diceSelection = nil, clampOutOfRange = false}
+                chat.Send("[DiceVision] All rules cleared (including defaults)")
+            else
+                -- Restore defaults
+                DiceVision.rules = {valueMappings = {}, diceSelection = nil, clampOutOfRange = false}
+                for dieType, mappings in pairs(DEFAULT_RULES.valueMappings) do
+                    DiceVision.rules.valueMappings[dieType] = {}
+                    for from, to in pairs(mappings) do
+                        DiceVision.rules.valueMappings[dieType][from] = to
+                    end
+                end
+                chat.Send("[DiceVision] Rules reset to defaults")
+            end
+
+        else
+            chat.Send([[
+[DiceVision] Rule commands:
+  /dv rules show                    - Show current rules
+  /dv rules map <die> <from> <to>   - Map die value (e.g., /dv rules map d10 0 10)
+  /dv rules keep <mode> <count>     - Keep highest/lowest N dice
+  /dv rules keep auto               - Auto-detect from roll context
+  /dv rules clamp <on|off>          - Clamp values outside 0-10 to 1
+  /dv rules clear                   - Reset rules to defaults
+  /dv rules clear all               - Clear all rules (including defaults)
+]])
+        end
+
     else
         chat.Send([[
 [DiceVision] Commands:
@@ -926,6 +1239,7 @@ Commands.dv = function(args)
   /dv disconnect      - Disconnect from session
   /dv status          - Show connection status
   /dv mode <mode>     - Set mode: off, chat, or replace
+  /dv rules           - Configure dice processing rules
   /dv test            - Test API connection
 
 Modes:

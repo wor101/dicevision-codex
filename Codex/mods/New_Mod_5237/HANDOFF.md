@@ -214,7 +214,81 @@ Custom chat panel rendering physical dice with icons:
 | `/dv disconnect` | Disconnect from session |
 | `/dv status` | Show connection status |
 | `/dv mode <off\|chat\|replace>` | Set operation mode |
+| `/dv rules <subcommand>` | Configure dice processing rules |
 | `/dv test` | Test API connection |
+
+---
+
+## Dice Rule Processing
+
+DiceVision includes a configurable rule system for processing physical dice values before they're used in rolls.
+
+### Configuration Structure
+
+```lua
+-- Default rules (restored on "rules clear")
+local DEFAULT_RULES = {
+    valueMappings = {
+        ["d10"] = {[0] = 10},  -- Standard d10: 0 reads as 10
+    },
+    diceSelection = nil,
+}
+
+-- Runtime rules (modified by commands)
+DiceVision.rules = {
+    valueMappings = {},      -- {dieType = {fromValue = toValue}}
+    diceSelection = nil,     -- {keep = "highest"|"lowest", count = N}
+    clampOutOfRange = false, -- Clamp values outside 0-10 to 1
+}
+```
+
+### Rule Processing Functions (Lines 246-398)
+
+| Function | Purpose | Parameters |
+|----------|---------|------------|
+| `clampOutOfRangeValues(dice, isEnabled)` | Clamp values outside 0-10 to 1 | dice array, boolean |
+| `applyValueMappings(dice, mappings)` | Apply value remapping (e.g., 0→10) | dice array, mapping table |
+| `applyDiceSelection(dice, selection)` | Keep highest/lowest N dice | dice array, selection config |
+| `detectDiceSelection(pendingRoll)` | Auto-detect numKeep from roll context | pendingRoll object |
+| `getEffectiveRules(pendingRoll)` | Merge manual rules with auto-detection | pendingRoll object |
+| `applyDiceRules(dice, pendingRoll)` | Main entry point - applies all rules | dice array, pendingRoll |
+
+### Rule Application Order
+
+```lua
+function applyDiceRules(dice, pendingRoll)
+    -- 1. Clamp out-of-range values first (before mappings)
+    processed = clampOutOfRangeValues(processed, DiceVision.rules.clampOutOfRange)
+
+    -- 2. Apply value mappings (e.g., d10 0 -> 10)
+    processed = applyValueMappings(processed, rules.valueMappings)
+
+    -- 3. Apply dice selection (keep highest/lowest N)
+    processed, droppedDice = applyDiceSelection(processed, rules.diceSelection)
+
+    return processed, droppedDice
+end
+```
+
+### Rules Commands
+
+| Command | Description |
+|---------|-------------|
+| `/dv rules show` | Display current rule configuration |
+| `/dv rules map <die> <from> <to>` | Add value mapping (e.g., `/dv rules map d10 0 10`) |
+| `/dv rules keep <highest\|lowest> <count>` | Override dice selection |
+| `/dv rules keep auto` | Use auto-detection from roll context |
+| `/dv rules clamp <on\|off>` | Toggle out-of-range clamping |
+| `/dv rules clear` | Reset to default rules |
+| `/dv rules clear all` | Clear all rules (no defaults) |
+
+### Clamping Behavior
+
+When `clampOutOfRange` is enabled:
+- Applies to **all rolls** (targeted, non-targeted, and chat mode)
+- Values < 0 or > 10 are clamped to 1
+- Logs clamped values: `[DiceVision] Clamped d10 value 14 -> 1 (out of 0-10 range)`
+- Useful for handling DiceVision misreads
 
 ---
 

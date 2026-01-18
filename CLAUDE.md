@@ -35,6 +35,7 @@ This repository contains a mod that integrates physical dice recognition (DiceVi
 - `/dv disconnect` - Disconnect
 - `/dv status` - Show connection status
 - `/dv mode <off|chat|replace>` - Set operation mode
+- `/dv rules <subcommand>` - Configure dice processing rules (map, keep, clamp, clear)
 
 ## Common Tasks
 - **Debugging roll issues**: Check `handlePendingRoll()` in DiceVision.lua (lines 562-694)
