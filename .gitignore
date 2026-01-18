@@ -23,3 +23,6 @@ Codex/blobs/
 # Cookies and Library files
 Codex/Cookies/
 Codex/Library
+
+# Local mod settings
+Codex/mods/settings.json
