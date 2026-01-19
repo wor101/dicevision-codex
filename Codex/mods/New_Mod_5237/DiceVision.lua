@@ -929,6 +929,10 @@ end
 -- Returns "intercept" to prevent dmhub.Roll from being called - we'll call it ourselves
 -- with a deterministic total once physical dice arrive
 RollDialog_BeforeRoll = function(context)
+    -- Safety checks for graceful failure
+    if not context then return nil end
+    if not DiceVision then return nil end
+
     -- Only intercept if in replace mode and connected
     if DiceVision.mode ~= "replace" or not DiceVision.connected then
         return nil  -- Let normal roll proceed

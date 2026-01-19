@@ -300,11 +300,26 @@ When `clampOutOfRange` is enabled:
 
 ---
 
+## DSRollDialog Hook (Optional Dependency)
+
+The `RollDialog_BeforeRoll` hook in DSRollDialog.lua is OPTIONAL:
+
+- **If DiceVision is loaded but hook is missing**: DiceVision won't intercept rolls, but chat/off modes still work
+- **If hook exists but DiceVision is missing**: Hook check fails gracefully, rolls proceed normally
+- **Both present**: Full DiceVision functionality in replace mode
+
+This design allows DiceVision to work on machines with the modified DSRollDialog.lua while failing gracefully on machines with the stock version.
+
+**Important**: DSRollDialog.lua modifications are LOCAL ONLY - they do NOT propagate to other players! For DiceVision roll replacement to work on another player's machine, they would need both the modified DSRollDialog.lua and the DiceVision mod installed locally.
+
+---
+
 ## Known Limitations
 
 1. Action Log shows total rather than individual dice values (visual panel compensates)
 2. Requires active DiceVision API connection
 3. Only works with Draw Steel roll dialogs (DSRollDialog.lua)
+4. Roll replacement mode requires modified DSRollDialog.lua (local install only)
 
 ---
 
