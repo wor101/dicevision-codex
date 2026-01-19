@@ -6,6 +6,7 @@ Codex/code-cache/
 Codex/raw-texture-cache/
 Codex/thumbnail-cache/
 Codex/HTTPCache/
+Codex/mods-temp/
 
 # Backups
 Codex/backups/
