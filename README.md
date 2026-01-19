@@ -114,7 +114,7 @@ DiceVision fully supports Draw Steel's edge and bane system:
 
 ## Technical Documentation
 
-For implementation details and developer documentation, see [HANDOFF.md](Codex/mods/New_Mod_5237/HANDOFF.md).
+For implementation details and developer documentation, see [HANDOFF.md](Codex/mods/DiceVision_5237/HANDOFF.md).
 
 ## License
 

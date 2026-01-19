@@ -84,7 +84,7 @@ end
 
 ---
 
-### 2. `New_Mod_5237/DiceVision.lua`
+### 2. `DiceVision_5237/DiceVision.lua`
 
 **Core Components:**
 
