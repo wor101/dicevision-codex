@@ -214,6 +214,12 @@ function CharacterPanel.DisplayAbility(token, ability, symbols)
     return false
 end
 
+function CharacterPanel.HighlightAbilitySection(options)
+    if g_characterDetailsPanel ~= nil and g_characterDetailsPanel.valid then
+        g_characterDetailsPanel:FireEventTree("showAbilitySection", options)
+    end
+end
+
 function CharacterPanel.HideAbility(ability)
     local ctrl = dmhub.modKeys['ctrl'] or false
     if ctrl then

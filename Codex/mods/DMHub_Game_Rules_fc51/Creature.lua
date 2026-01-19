@@ -5659,11 +5659,11 @@ function creature:OnMove(path)
         }
     })
 
-    if path.shifting or path.forced then
+    if path.forced then
         return
     end
 
-    local immuneFromOpportunityAttacks = self:CalculateNamedCustomAttribute("Immunity from Opportunity Attack") > 0
+    local immuneFromOpportunityAttacks = path.shifting or (self:CalculateNamedCustomAttribute("Immunity from Opportunity Attack") > 0)
 
 
     local allTokens = dmhub.allTokens

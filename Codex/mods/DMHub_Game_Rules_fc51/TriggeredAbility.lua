@@ -18,6 +18,51 @@ TriggeredAbility.DespawnBehaviors = {
     },
 }
 
+setting{
+    id = "game:heroicresourcetriggers",
+    classes = {"dmonly"},
+    storage = "game",
+    section = "Game",
+    editor = "check",
+    description = "Automated Heroic Resource Gains",
+    default = true,
+}
+
+TriggeredAbility.mandatoryTriggerSettings = {
+    {
+        id = true,
+        text = "Occurs Automatically",
+    },
+    {
+        id = false,
+        text = "Prompt",
+    },
+    {
+        id = "game:heroicresourcetriggers",
+        text = "Automatic Heroic Resource Setting",
+    }
+}
+
+function TriggeredAbility:IsMandatory()
+    if self.mandatory == true then
+        return true
+    elseif self.mandatory == false then
+        return false
+    end
+
+    --mandatory/automatic.
+    local mandatory = dmhub.GetSettingValue(self.mandatory)
+    return mandatory
+end
+
+function TriggeredAbility:MayBePrompted()
+    if self.mandatory == true then
+        return false
+    end
+
+    return true
+end
+
 ActivatedAbility.OnTypeRegistered = function()
 	TriggeredAbility.Types = {}
 
@@ -875,7 +920,7 @@ function TriggeredAbility:Trigger(characterModifier, creature, symbols, auraCont
 		g_triggerDepth = g_triggerDepth - 1
 	end
 
-	if self.mandatory or (self:try_get("mandatoryDifferentPlayer", false) and casterToken.activeControllerId == nil) then
+	if self:IsMandatory() or (self:try_get("mandatoryDifferentPlayer", false) and casterToken.activeControllerId == nil) then
 		executeTrigger()
 	else
 		dmhub.Coroutine(function()
@@ -953,6 +998,8 @@ function TriggeredAbility:Trigger(characterModifier, creature, symbols, auraCont
 
 			local sustain = true
 			local gameupdate = dmhub.ngameupdate
+
+            local expireAt = nil
             
 			while trigger ~= nil and (not trigger.triggered) and (not trigger.dismissed) and sustain do
 				coroutine.yield()
@@ -962,16 +1009,12 @@ function TriggeredAbility:Trigger(characterModifier, creature, symbols, auraCont
                     break
                 end
 
-                if casterToken.properties:GetResourceRefreshId("turn") ~= turnid then
-                    local runtime = dmhub.Time() - starttime
-                    if runtime < 2 then
-                        --let it roll over to the next turn as our turn id since it changed
-                        --turn almost immediately.
-                        turnid = casterToken.properties:GetResourceRefreshId("turn")
-                    elseif runtime > 8 then
-                        --make sure we show the trigger for at least 8 seconds, then expire it.
+                if expireAt ~= nil then
+                    if dmhub.Time() >= expireAt then
                         sustain = false
                     end
+                elseif casterToken.properties:GetResourceRefreshId("turn") ~= turnid and (dmhub.initiativeQueue == nil or (not dmhub.initiativeQueue:ChoosingTurn())) then
+                    expireAt = dmhub.Time() + 6
                 end
 
                 local triggers = casterToken.properties:GetAvailableTriggers() or {}

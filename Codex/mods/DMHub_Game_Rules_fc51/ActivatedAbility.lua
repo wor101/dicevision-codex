@@ -1040,6 +1040,16 @@ function ActivatedAbility:TargetPassesFilter(casterToken, targetToken, symbols, 
 		return false
 	end
 
+	if targetToken.properties:CalculateNamedCustomAttribute("Untargetable") > 0 then
+		return false
+	end
+
+    if self.targetType == "all" and casterToken:GetLineOfSight(targetToken) <= 0 then
+        return false
+    elseif symbols.targetArea ~= nil and targetToken:GetLineOfSight(symbols.targetArea.origin) <= 0 then
+        return false
+    end
+
     if self.targetAllegiance == "dead" then
         print("Dead:: isCorpse =", targetToken.isCorpse)
         if not targetToken.isCorpse then
@@ -2174,8 +2184,6 @@ function ActivatedAbility:Cast(casterToken, targets, options)
 		options.symbols.upcast = self.castingLevel - self:try_get("level", 1)
 	end
 
-	print("Options::", json(options))
-
 	local continueCasting = nil
 	casterToken:ModifyProperties{
 		description = "Cast Spell",
@@ -2397,6 +2405,17 @@ function ActivatedAbility.CastCoroutine(self, casterToken, targets, options)
 
 	for i,behavior in ipairs(self.behaviors) do
 		if not behavior.instant and (not behavior:IsFiltered(self, casterToken, options)) then
+            if behavior.typeName == "ActivatedAbilityPowerRollBehavior" then
+                CharacterPanel.HighlightAbilitySection{
+                    ability = self,
+                    section = "main",
+                }
+            else
+                CharacterPanel.HighlightAbilitySection{
+                    ability = self,
+                    section = "effects",
+                }
+            end
 			behavior:Cast(self, casterToken, behavior:ApplyToTargets(self, casterToken, targets, options), options)
             if options.abort and (not options.pay) then
                 break
@@ -2990,26 +3009,28 @@ function ActivatedAbilityBehavior:ApplyToTargets(ability, casterToken, targets, 
 
 
 		for i,item in ipairs(result) do
-			symbols.target = item.token.properties
-			symbols.caster = casterToken.properties
-			symbols.targetnumber = i
-			symbols.numberoftargets = #result
-			local passFilter = nil
+            if item.token ~= nil then
+                symbols.target = item.token.properties
+                symbols.caster = casterToken.properties
+                symbols.targetnumber = i
+                symbols.numberoftargets = #result
+                local passFilter = nil
 
-			--find out if the user got to choose to select whether this applies with the attack roll.
-			for _,override in ipairs(options.passFilterOverrides or {}) do
-				if override.target == symbols.target and override.behavior == self then
-					passFilter = override.value
-				end
-			end
-			
-			if passFilter == nil then
-				passFilter = GoblinScriptTrue(ExecuteGoblinScript(self.filterTarget, item.token.properties:LookupSymbol(symbols), 1, string.format("Filter targets: %s", ability.name)))
-			end
+                --find out if the user got to choose to select whether this applies with the attack roll.
+                for _,override in ipairs(options.passFilterOverrides or {}) do
+                    if override.target == symbols.target and override.behavior == self then
+                        passFilter = override.value
+                    end
+                end
+                
+                if passFilter == nil then
+                    passFilter = GoblinScriptTrue(ExecuteGoblinScript(self.filterTarget, item.token.properties:LookupSymbol(symbols), 1, string.format("Filter targets: %s", ability.name)))
+                end
 
-			if passFilter then
-				filteredResult[#filteredResult+1] = item
-			end
+                if passFilter then
+                    filteredResult[#filteredResult+1] = item
+                end
+            end
 		end
 
 		result = filteredResult

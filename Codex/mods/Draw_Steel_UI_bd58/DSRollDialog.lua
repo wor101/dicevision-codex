@@ -2404,7 +2404,6 @@ function GameHud.CreateRollDialog(self)
 
         if needReroll then
             rollAgainButton:FireEvent("press")
-            return true
         end
     end
 
@@ -2807,13 +2806,11 @@ function GameHud.CreateRollDialog(self)
                         local TryToProceed
                         local m_timerState = nil
 
-
                         TryToProceed = function()
                             if resultPanel.valid and showingDialog then
 
                                 local tokens = dmhub.allTokens
                                 local haveTriggers = false
-
 
                                 for _,tok in ipairs(tokens) do
                                     if tok.playerControlled then
@@ -2826,21 +2823,6 @@ function GameHud.CreateRollDialog(self)
                                         end
                                     end
                                 end
-
-                                --check to make sure we don't need to reroll.
-                                if not haveTriggers then
-                                    triggersContainer:FireEvent("charactersUpdated")
-                                    CalculateRollText()
-                                    local rerolling = RecalculateMultiTargets()
-                                    if rerolling then
-                                        --we need to reroll.
-                                        dmhub.Schedule(3.0, function()
-                                            TryToProceed()
-                                        end)
-                                        return
-                                    end
-                                end
-
 
                                 if haveTriggers and (m_timerState == nil or (dmhub.Time() < m_timerState.expire) or m_timerState.paused) then
                                     local t = dmhub.Time()
@@ -3199,35 +3181,6 @@ function GameHud.CreateRollDialog(self)
                 }
 
                 g_activeRollArgs = rollArgs
-
-                -- Hook for external mods to intercept rolls (e.g., DiceVision physical dice)
-                -- Returns "intercept" if the mod wants to handle the roll itself
-                -- In that case, we skip dmhub.Roll - the mod will call it later with modified args
-                local hookResult = nil
-                if RollDialog_BeforeRoll then
-                    hookResult = RollDialog_BeforeRoll({
-                        rollArgs = rollArgs,
-                        roll = rollArgs.roll,
-                        description = rollArgs.description,
-                        creature = rollArgs.creature,
-                        tokenid = rollArgs.tokenid,
-                        properties = rollArgs.properties,
-                        dmonly = rollArgs.dmonly,
-                        instant = rollArgs.instant,
-                        silent = rollArgs.silent,
-                        delay = rollArgs.delay,
-                        guid = rollArgs.guid,
-                        modifiers = modifiersUsed,
-                        multitargets = multitargetsUsed,
-                        boons = m_boons,  -- Edge/Bane state for DiceVision
-                    })
-                end
-
-                -- If hook returns "intercept", the mod will handle calling dmhub.Roll
-                if hookResult == "intercept" then
-                    return
-                end
-
                 activeRoll = dmhub.Roll(rollArgs)
                 print("ROLL:: ACTIVE ROLL FROM", rollArgs, "HAVE", activeRoll)
 
