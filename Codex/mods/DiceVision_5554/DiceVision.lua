@@ -910,6 +910,43 @@ Commands.dv = function(args)
             end,
         }
 
+    elseif subcommand == "testtimeout" then
+        local seconds = tonumber(parts[2])
+        local testTimeoutParam = (parts[3] == "timeout")  -- /dv testtimeout 30 timeout
+
+        if not seconds then
+            chat.Send("[DiceVision] Usage: /dv testtimeout <seconds> [timeout]")
+            chat.Send("[DiceVision] Add 'timeout' to test passing timeout parameter to net.Get")
+            return
+        end
+
+        local startTime = dmhub.Time()
+        local testMode = testTimeoutParam and " (with timeout param)" or ""
+        chat.Send(string.format("[DiceVision] Testing %ds delay%s...", seconds, testMode))
+
+        local requestArgs = {
+            url = "https://dicevision.dirtyowlbear.com/api/codex/test/delay?seconds=" .. seconds,
+            success = function(data)
+                local elapsed = dmhub.Time() - startTime
+                chat.Send(string.format("[DiceVision] SUCCESS: %ds test completed in %.1fs", seconds, elapsed))
+                if data and data.actual_seconds then
+                    chat.Send(string.format("[DiceVision] Server reported: %.2fs actual delay", data.actual_seconds))
+                end
+            end,
+            error = function(err, statusCode)
+                local elapsed = dmhub.Time() - startTime
+                chat.Send(string.format("[DiceVision] FAILED after %.1fs: %s (status: %s)",
+                    elapsed, tostring(err), tostring(statusCode or "unknown")))
+            end,
+        }
+
+        -- Test undocumented timeout parameter
+        if testTimeoutParam then
+            requestArgs.timeout = seconds + 10  -- Give 10s buffer
+        end
+
+        net.Get(requestArgs)
+
     elseif subcommand == "rules" then
         local action = parts[2]
 
