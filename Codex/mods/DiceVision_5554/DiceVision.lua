@@ -21,6 +21,7 @@ local DiceVision = {
     isPolling = false,
     pollIntervalMs = 500,
     lastPollTime = 0,
+    longpoll = true,  -- Use long-polling endpoint (default: true)
 
     -- Pending roll state
     pendingRoll = nil,
@@ -459,6 +460,10 @@ end
 
 local stopPolling
 local removeRollInterceptor
+local checkRollTimeout      -- Used by longPollForRolls
+local handlePendingRoll     -- Used by handleDiceVisionRoll
+local postRollToChat        -- Used by handleDiceVisionRoll
+local longPollForRolls      -- Recursive call
 
 -- ============================================================================
 -- API Communication
@@ -531,11 +536,68 @@ local function pollForRolls(callback)
     }
 end
 
+local function handleDiceVisionRoll(rollData)
+    local used = false
+    if DiceVision.mode == "replace" and DiceVision.waitingForRoll then
+        used = handlePendingRoll(rollData)
+    end
+
+    if DiceVision.mode == "chat" or (DiceVision.mode == "replace" and not used) then
+        postRollToChat(rollData)
+    end
+end
+
+longPollForRolls = function()
+    if not DiceVision.connected or not DiceVision.sessionCode then
+        return
+    end
+
+    local url = DiceVision.baseUrl .. "/api/codex/session/" .. DiceVision.sessionCode .. "/wait?timeout=25"
+
+    -- Add mode and request_id parameters
+    local mode = DiceVision.waitingForRoll and "waiting" or "background"
+    url = url .. "&acknowledge=true&limit=10&mode=" .. mode
+    if DiceVision.waitingForRoll and DiceVision.currentRequestId then
+        url = url .. "&request_id=" .. DiceVision.currentRequestId
+    end
+
+    net.Get{
+        url = url,
+        success = function(data)
+            -- Process response (same as pollForRolls success handler)
+            if data and data.poll_interval_ms then
+                DiceVision.pollIntervalMs = data.poll_interval_ms
+            end
+            if data and data.rolls then
+                for _, roll in ipairs(data.rolls) do
+                    handleDiceVisionRoll(roll)
+                end
+            end
+            -- Immediately reconnect if still polling
+            if DiceVision.isPolling and DiceVision.connected then
+                checkRollTimeout()
+                longPollForRolls()
+            end
+        end,
+        error = function(err, statusCode)
+            printf("[DiceVision] Long-poll error: %s (status: %s)", tostring(err), tostring(statusCode or "unknown"))
+            -- Fall back to short polling on error, then retry long-poll
+            if DiceVision.isPolling and DiceVision.connected then
+                dmhub.Schedule(2, function()
+                    if DiceVision.isPolling and DiceVision.connected then
+                        longPollForRolls()
+                    end
+                end)
+            end
+        end,
+    }
+end
+
 -- ============================================================================
 -- Level 1: Chat Integration
 -- ============================================================================
 
-local function postRollToChat(rollData)
+postRollToChat = function(rollData)
     local processedDice, droppedDice = applyDiceRules(rollData.dice, nil)
     local diceForMessage = {}
     local diceSum = 0
@@ -605,7 +667,7 @@ local function postDiceVisionRollToChat(rollData, rollInfo, pendingRoll)
     chat.SendCustom(message)
 end
 
-local function handlePendingRoll(rollData)
+handlePendingRoll = function(rollData)
     if not DiceVision.pendingRoll then
         return false
     end
@@ -706,7 +768,7 @@ local function handlePendingRoll(rollData)
     return true
 end
 
-local function checkRollTimeout()
+checkRollTimeout = function()
     if DiceVision.waitingForRoll then
         local elapsed = (dmhub.Time() * 1000) - DiceVision.rollStartTime
         if elapsed > DiceVision.rollTimeout then
@@ -788,30 +850,28 @@ local function startPolling()
 
     DiceVision.isPolling = true
 
-    local function poll()
-        if not DiceVision.isPolling or not DiceVision.connected then
-            return
-        end
-
-        checkRollTimeout()
-
-        pollForRolls(function(rolls)
-            for _, rollData in ipairs(rolls) do
-                local used = false
-                if DiceVision.mode == "replace" and DiceVision.waitingForRoll then
-                    used = handlePendingRoll(rollData)
-                end
-
-                if DiceVision.mode == "chat" or (DiceVision.mode == "replace" and not used) then
-                    postRollToChat(rollData)
-                end
+    if DiceVision.longpoll then
+        -- Long-polling mode: single persistent connection
+        longPollForRolls()
+    else
+        -- Short-polling mode: existing behavior
+        local function poll()
+            if not DiceVision.isPolling or not DiceVision.connected then
+                return
             end
-        end)
 
-        dmhub.Schedule(DiceVision.pollIntervalMs / 1000, poll)
+            checkRollTimeout()
+
+            pollForRolls(function(rolls)
+                for _, rollData in ipairs(rolls) do
+                    handleDiceVisionRoll(rollData)
+                end
+            end)
+
+            dmhub.Schedule(DiceVision.pollIntervalMs / 1000, poll)
+        end
+        poll()
     end
-
-    poll()
 end
 
 stopPolling = function()
@@ -861,12 +921,14 @@ Commands.dv = function(args)
         chat.Send("[DiceVision] Disconnected")
 
     elseif subcommand == "status" then
+        local pollingMode = DiceVision.longpoll and "long-poll" or "500ms interval"
         local status = string.format(
-            "[DiceVision] Status:\n  Connected: %s\n  Session: %s\n  Mode: %s\n  Polling: %s",
+            "[DiceVision] Status:\n  Connected: %s\n  Session: %s\n  Mode: %s\n  Polling: %s (%s)",
             tostring(DiceVision.connected),
             DiceVision.sessionCode or "none",
             DiceVision.mode,
-            tostring(DiceVision.isPolling)
+            tostring(DiceVision.isPolling),
+            pollingMode
         )
         chat.Send(status)
 
@@ -946,6 +1008,35 @@ Commands.dv = function(args)
         end
 
         net.Get(requestArgs)
+
+    elseif subcommand == "config" then
+        local setting = parts[2]
+        local value = parts[3]
+
+        if setting == "longpoll" then
+            if value == "on" or value == "true" then
+                DiceVision.longpoll = true
+                chat.Send("[DiceVision] Long-polling enabled")
+                -- Restart polling if currently active
+                if DiceVision.isPolling then
+                    stopPolling()
+                    startPolling()
+                end
+            elseif value == "off" or value == "false" then
+                DiceVision.longpoll = false
+                chat.Send("[DiceVision] Long-polling disabled (using 500ms polling)")
+                if DiceVision.isPolling then
+                    stopPolling()
+                    startPolling()
+                end
+            else
+                chat.Send("[DiceVision] Current: longpoll = " .. (DiceVision.longpoll and "on" or "off"))
+                chat.Send("[DiceVision] Usage: /dv config longpoll on|off")
+            end
+        else
+            chat.Send("[DiceVision] Available config options:")
+            chat.Send("  longpoll on|off - Use long-polling endpoint (current: " .. (DiceVision.longpoll and "on" or "off") .. ")")
+        end
 
     elseif subcommand == "rules" then
         local action = parts[2]
@@ -1041,6 +1132,7 @@ Commands.dv = function(args)
   /dv disconnect      - Disconnect from session
   /dv status          - Show connection status
   /dv mode <mode>     - Set mode: off, chat, or replace
+  /dv config          - Configure settings (longpoll)
   /dv rules           - Configure dice processing rules
   /dv test            - Test API connection
 
