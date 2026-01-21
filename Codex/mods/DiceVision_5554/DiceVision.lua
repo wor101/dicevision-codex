@@ -677,6 +677,11 @@ handlePendingRoll = function(rollData)
     DiceVision.currentRequestId = generateRequestId()
     hideWaitingDialog()
 
+    -- Stop polling after roll is handled (for replace mode)
+    if DiceVision.mode == "replace" then
+        stopPolling()
+    end
+
     local modifier = extractModifierFromRoll(pendingRoll.originalRoll)
     local diceSum = 0
     local processedDice, droppedDice = applyDiceRules(rollData.dice, pendingRoll)
@@ -777,6 +782,11 @@ checkRollTimeout = function()
             DiceVision.pendingRoll = nil
             DiceVision.currentRequestId = generateRequestId()
             hideWaitingDialog()
+
+            -- Stop polling on timeout (for replace mode)
+            if DiceVision.mode == "replace" then
+                stopPolling()
+            end
         end
     end
 end
@@ -822,6 +832,11 @@ RollDialog_BeforeRoll = function(context)
     DiceVision.waitingForRoll = true
     DiceVision.rollStartTime = dmhub.Time() * 1000
     DiceVision.currentRequestId = generateRequestId()
+
+    -- Start polling now (will send mode=waiting immediately)
+    if DiceVision.connected and not DiceVision.isPolling then
+        startPolling()
+    end
 
     showWaitingDialog()
     chat.Send("[DiceVision] Waiting for physical dice...")
@@ -953,9 +968,8 @@ Commands.dv = function(args)
             end
         elseif newMode == "replace" then
             installRollInterceptor()
-            if DiceVision.connected then
-                startPolling()
-            end
+            -- Don't start polling here - wait for ability test to trigger it
+            -- This ensures the first request sends mode=waiting immediately
         end
 
         chat.Send("[DiceVision] Mode changed: " .. oldMode .. " -> " .. newMode)
