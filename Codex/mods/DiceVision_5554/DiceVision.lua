@@ -458,6 +458,7 @@ end
 -- Forward Declarations
 -- ============================================================================
 
+local startPolling          -- Used by RollDialog_BeforeRoll
 local stopPolling
 local removeRollInterceptor
 local checkRollTimeout      -- Used by longPollForRolls
@@ -858,7 +859,7 @@ end
 -- Polling Loop
 -- ============================================================================
 
-local function startPolling()
+startPolling = function()
     if DiceVision.isPolling then
         return
     end
