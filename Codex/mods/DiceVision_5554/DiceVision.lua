@@ -31,6 +31,11 @@ local DiceVision = {
 
     -- Request ID for polling
     currentRequestId = nil,
+
+    -- Panel-specific state (independent of replace mode)
+    panelWaitingForRoll = false,
+    panelPollStartTime = 0,
+    panelRequestId = nil,
 }
 
 -- Default dice rules (applied on load and after "rules clear")
@@ -63,6 +68,9 @@ end
 local function generateRequestId()
     return tostring(os.time()) .. "-" .. tostring(math.random(1000, 9999))
 end
+
+-- Expose for DVDicePanel.lua
+DiceVision.generateRequestId = generateRequestId
 
 local function formatDice(dice)
     local parts = {}
@@ -538,6 +546,14 @@ local function pollForRolls(callback)
 end
 
 local function handleDiceVisionRoll(rollData)
+    -- Handle panel-initiated roll first
+    if DiceVision.panelWaitingForRoll then
+        postRollToChat(rollData)
+        DiceVision.panelWaitingForRoll = false
+        DiceVision.panelRequestId = generateRequestId()
+        return
+    end
+
     local used = false
     if DiceVision.mode == "replace" and DiceVision.waitingForRoll then
         used = handlePendingRoll(rollData)
@@ -790,6 +806,16 @@ checkRollTimeout = function()
             end
         end
     end
+
+    -- Panel roll timeout
+    if DiceVision.panelWaitingForRoll then
+        local elapsed = (dmhub.Time() * 1000) - DiceVision.panelPollStartTime
+        if elapsed > DiceVision.rollTimeout then
+            chat.Send("[DiceVision] Timeout waiting for dice. Try again.")
+            DiceVision.panelWaitingForRoll = false
+            DiceVision.panelRequestId = generateRequestId()
+        end
+    end
 end
 
 -- ============================================================================
@@ -893,6 +919,10 @@ end
 stopPolling = function()
     DiceVision.isPolling = false
 end
+
+-- Expose for DVDicePanel.lua
+DiceVision.startPolling = startPolling
+DiceVision.postRollToChat = postRollToChat
 
 -- ============================================================================
 -- Commands
