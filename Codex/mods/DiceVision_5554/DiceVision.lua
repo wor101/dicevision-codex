@@ -587,7 +587,7 @@ longPollForRolls = function()
     net.Get{
         url = url,
         success = function(data)
-            -- Process response (same as pollForRolls success handler)
+            -- Process response
             if data and data.poll_interval_ms then
                 DiceVision.pollIntervalMs = data.poll_interval_ms
             end
@@ -596,22 +596,14 @@ longPollForRolls = function()
                     handleDiceVisionRoll(roll)
                 end
             end
-            -- Immediately reconnect if still polling
-            if DiceVision.isPolling and DiceVision.connected then
-                checkRollTimeout()
-                longPollForRolls()
-            end
+            -- No recursive call - one poll per roll request
+            -- Next roll will call startPolling() fresh with mode=waiting
+            DiceVision.isPolling = false
         end,
         error = function(err, statusCode)
             printf("[DiceVision] Long-poll error: %s (status: %s)", tostring(err), tostring(statusCode or "unknown"))
-            -- Fall back to short polling on error, then retry long-poll
-            if DiceVision.isPolling and DiceVision.connected then
-                dmhub.Schedule(2, function()
-                    if DiceVision.isPolling and DiceVision.connected then
-                        longPollForRolls()
-                    end
-                end)
-            end
+            -- No retry - next roll will start fresh polling
+            DiceVision.isPolling = false
         end,
     }
 end
