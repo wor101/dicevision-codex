@@ -514,15 +514,18 @@ local function pollForRolls(callback)
     if not DiceVision.connected or not DiceVision.sessionCode then
         return
     end
-    local pollMode = DiceVision.waitingForRoll and "waiting" or "background"
+    local pollMode = (DiceVision.waitingForRoll or DiceVision.panelWaitingForRoll) and "waiting" or "background"
     local url = string.format(
         "%s/api/codex/session/%s/rolls?acknowledge=true&limit=10&mode=%s",
         DiceVision.baseUrl,
         DiceVision.sessionCode,
         pollMode
     )
-    if pollMode == "waiting" and DiceVision.currentRequestId then
-        url = url .. "&request_id=" .. DiceVision.currentRequestId
+    if pollMode == "waiting" then
+        local requestId = DiceVision.currentRequestId or DiceVision.panelRequestId
+        if requestId then
+            url = url .. "&request_id=" .. requestId
+        end
     end
     net.Get{
         url = url,
@@ -572,10 +575,13 @@ longPollForRolls = function()
     local url = DiceVision.baseUrl .. "/api/codex/session/" .. DiceVision.sessionCode .. "/wait?timeout=25"
 
     -- Add mode and request_id parameters
-    local mode = DiceVision.waitingForRoll and "waiting" or "background"
+    local mode = (DiceVision.waitingForRoll or DiceVision.panelWaitingForRoll) and "waiting" or "background"
     url = url .. "&acknowledge=true&limit=10&mode=" .. mode
-    if DiceVision.waitingForRoll and DiceVision.currentRequestId then
-        url = url .. "&request_id=" .. DiceVision.currentRequestId
+    if mode == "waiting" then
+        local requestId = DiceVision.currentRequestId or DiceVision.panelRequestId
+        if requestId then
+            url = url .. "&request_id=" .. requestId
+        end
     end
 
     net.Get{
