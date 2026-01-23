@@ -578,7 +578,13 @@ longPollForRolls = function()
     local mode = (DiceVision.waitingForRoll or DiceVision.panelWaitingForRoll) and "waiting" or "background"
     url = url .. "&acknowledge=true&limit=10&mode=" .. mode
     if mode == "waiting" then
-        local requestId = DiceVision.currentRequestId or DiceVision.panelRequestId
+        -- Use the correct request_id based on which roll type is waiting
+        local requestId = nil
+        if DiceVision.waitingForRoll then
+            requestId = DiceVision.currentRequestId
+        elseif DiceVision.panelWaitingForRoll then
+            requestId = DiceVision.panelRequestId
+        end
         if requestId then
             url = url .. "&request_id=" .. requestId
         end
