@@ -8,7 +8,7 @@ local mod = dmhub.GetModLoading()
 -- Configuration & State
 -- ============================================================================
 
-local DiceVision = {
+DiceVision = {
     -- Connection settings
     baseUrl = "https://dicevision.dirtyowlbear.com",
     sessionCode = nil,
