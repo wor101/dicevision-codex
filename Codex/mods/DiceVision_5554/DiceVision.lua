@@ -14,7 +14,7 @@ DiceVision = {
     sessionCode = nil,
     connected = false,
 
-    -- Mode: "off", "chat", or "replace"
+    -- Mode: "off" or "replace"
     mode = "off",
 
     -- Polling state
@@ -562,7 +562,7 @@ local function handleDiceVisionRoll(rollData)
         used = handlePendingRoll(rollData)
     end
 
-    if DiceVision.mode == "chat" or (DiceVision.mode == "replace" and not used) then
+    if DiceVision.mode == "replace" and not used then
         postRollToChat(rollData)
     end
 end
@@ -954,10 +954,8 @@ Commands.dv = function(args)
 
         validateSession(function(success, result)
             if success then
-                chat.Send("[DiceVision] Connected successfully!")
-                if DiceVision.mode ~= "off" then
-                    startPolling()
-                end
+                DiceVision.mode = "replace"
+                chat.Send("[DiceVision] Connected! Ready to capture dice rolls.")
             else
                 chat.Send("[DiceVision] Connection failed: " .. tostring(result))
                 DiceVision.sessionCode = nil
@@ -986,8 +984,8 @@ Commands.dv = function(args)
 
     elseif subcommand == "mode" then
         local newMode = parts[2]
-        if not newMode or (newMode ~= "off" and newMode ~= "chat" and newMode ~= "replace") then
-            chat.Send("[DiceVision] Usage: /dv mode <off|chat|replace>")
+        if not newMode or (newMode ~= "off" and newMode ~= "replace") then
+            chat.Send("[DiceVision] Usage: /dv mode <off|replace>")
             chat.Send("[DiceVision] Current mode: " .. DiceVision.mode)
             return
         end
@@ -998,11 +996,6 @@ Commands.dv = function(args)
         if newMode == "off" then
             stopPolling()
             removeRollInterceptor()
-        elseif newMode == "chat" then
-            removeRollInterceptor()
-            if DiceVision.connected then
-                startPolling()
-            end
         elseif newMode == "replace" then
             installRollInterceptor()
             -- Don't start polling here - wait for ability test to trigger it
@@ -1182,14 +1175,13 @@ Commands.dv = function(args)
   /dv connect <code>  - Connect to DiceVision session
   /dv disconnect      - Disconnect from session
   /dv status          - Show connection status
-  /dv mode <mode>     - Set mode: off, chat, or replace
+  /dv mode <mode>     - Set mode: off or replace
   /dv config          - Configure settings (longpoll)
   /dv rules           - Configure dice processing rules
   /dv test            - Test API connection
 
 Modes:
   off     - DiceVision disabled
-  chat    - Physical rolls shown in chat (alongside virtual)
   replace - Physical rolls replace virtual dice
 ]=])
     end
