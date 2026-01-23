@@ -8,13 +8,13 @@ local mod = dmhub.GetModLoading()
 -- Configuration & State
 -- ============================================================================
 
-local DiceVision = {
+DiceVision = {
     -- Connection settings
     baseUrl = "https://dicevision.dirtyowlbear.com",
     sessionCode = nil,
     connected = false,
 
-    -- Mode: "off", "chat", or "replace"
+    -- Mode: "off" or "replace"
     mode = "off",
 
     -- Polling state
@@ -31,6 +31,11 @@ local DiceVision = {
 
     -- Request ID for polling
     currentRequestId = nil,
+
+    -- Panel-specific state (independent of replace mode)
+    panelWaitingForRoll = false,
+    panelPollStartTime = 0,
+    panelRequestId = nil,
 }
 
 -- Default dice rules (applied on load and after "rules clear")
@@ -63,6 +68,9 @@ end
 local function generateRequestId()
     return tostring(os.time()) .. "-" .. tostring(math.random(1000, 9999))
 end
+
+-- Expose for DVDicePanel.lua
+DiceVision.generateRequestId = generateRequestId
 
 local function formatDice(dice)
     local parts = {}
@@ -506,15 +514,18 @@ local function pollForRolls(callback)
     if not DiceVision.connected or not DiceVision.sessionCode then
         return
     end
-    local pollMode = DiceVision.waitingForRoll and "waiting" or "background"
+    local pollMode = (DiceVision.waitingForRoll or DiceVision.panelWaitingForRoll) and "waiting" or "background"
     local url = string.format(
         "%s/api/codex/session/%s/rolls?acknowledge=true&limit=10&mode=%s",
         DiceVision.baseUrl,
         DiceVision.sessionCode,
         pollMode
     )
-    if pollMode == "waiting" and DiceVision.currentRequestId then
-        url = url .. "&request_id=" .. DiceVision.currentRequestId
+    if pollMode == "waiting" then
+        local requestId = DiceVision.currentRequestId or DiceVision.panelRequestId
+        if requestId then
+            url = url .. "&request_id=" .. requestId
+        end
     end
     net.Get{
         url = url,
@@ -538,12 +549,20 @@ local function pollForRolls(callback)
 end
 
 local function handleDiceVisionRoll(rollData)
+    -- Handle panel-initiated roll first
+    if DiceVision.panelWaitingForRoll then
+        postRollToChat(rollData)
+        DiceVision.panelWaitingForRoll = false
+        DiceVision.panelRequestId = generateRequestId()
+        return
+    end
+
     local used = false
     if DiceVision.mode == "replace" and DiceVision.waitingForRoll then
         used = handlePendingRoll(rollData)
     end
 
-    if DiceVision.mode == "chat" or (DiceVision.mode == "replace" and not used) then
+    if DiceVision.mode == "replace" and not used then
         postRollToChat(rollData)
     end
 end
@@ -556,16 +575,25 @@ longPollForRolls = function()
     local url = DiceVision.baseUrl .. "/api/codex/session/" .. DiceVision.sessionCode .. "/wait?timeout=25"
 
     -- Add mode and request_id parameters
-    local mode = DiceVision.waitingForRoll and "waiting" or "background"
+    local mode = (DiceVision.waitingForRoll or DiceVision.panelWaitingForRoll) and "waiting" or "background"
     url = url .. "&acknowledge=true&limit=10&mode=" .. mode
-    if DiceVision.waitingForRoll and DiceVision.currentRequestId then
-        url = url .. "&request_id=" .. DiceVision.currentRequestId
+    if mode == "waiting" then
+        -- Use the correct request_id based on which roll type is waiting
+        local requestId = nil
+        if DiceVision.waitingForRoll then
+            requestId = DiceVision.currentRequestId
+        elseif DiceVision.panelWaitingForRoll then
+            requestId = DiceVision.panelRequestId
+        end
+        if requestId then
+            url = url .. "&request_id=" .. requestId
+        end
     end
 
     net.Get{
         url = url,
         success = function(data)
-            -- Process response (same as pollForRolls success handler)
+            -- Process response
             if data and data.poll_interval_ms then
                 DiceVision.pollIntervalMs = data.poll_interval_ms
             end
@@ -574,22 +602,14 @@ longPollForRolls = function()
                     handleDiceVisionRoll(roll)
                 end
             end
-            -- Immediately reconnect if still polling
-            if DiceVision.isPolling and DiceVision.connected then
-                checkRollTimeout()
-                longPollForRolls()
-            end
+            -- No recursive call - one poll per roll request
+            -- Next roll will call startPolling() fresh with mode=waiting
+            DiceVision.isPolling = false
         end,
         error = function(err, statusCode)
             printf("[DiceVision] Long-poll error: %s (status: %s)", tostring(err), tostring(statusCode or "unknown"))
-            -- Fall back to short polling on error, then retry long-poll
-            if DiceVision.isPolling and DiceVision.connected then
-                dmhub.Schedule(2, function()
-                    if DiceVision.isPolling and DiceVision.connected then
-                        longPollForRolls()
-                    end
-                end)
-            end
+            -- No retry - next roll will start fresh polling
+            DiceVision.isPolling = false
         end,
     }
 end
@@ -790,6 +810,16 @@ checkRollTimeout = function()
             end
         end
     end
+
+    -- Panel roll timeout
+    if DiceVision.panelWaitingForRoll then
+        local elapsed = (dmhub.Time() * 1000) - DiceVision.panelPollStartTime
+        if elapsed > DiceVision.rollTimeout then
+            chat.Send("[DiceVision] Timeout waiting for dice. Try again.")
+            DiceVision.panelWaitingForRoll = false
+            DiceVision.panelRequestId = generateRequestId()
+        end
+    end
 end
 
 -- ============================================================================
@@ -894,6 +924,10 @@ stopPolling = function()
     DiceVision.isPolling = false
 end
 
+-- Expose for DVDicePanel.lua
+DiceVision.startPolling = startPolling
+DiceVision.postRollToChat = postRollToChat
+
 -- ============================================================================
 -- Commands
 -- ============================================================================
@@ -918,10 +952,8 @@ Commands.dv = function(args)
 
         validateSession(function(success, result)
             if success then
-                chat.Send("[DiceVision] Connected successfully!")
-                if DiceVision.mode ~= "off" then
-                    startPolling()
-                end
+                DiceVision.mode = "replace"
+                chat.Send("[DiceVision] Connected! Ready to capture dice rolls.")
             else
                 chat.Send("[DiceVision] Connection failed: " .. tostring(result))
                 DiceVision.sessionCode = nil
@@ -950,8 +982,8 @@ Commands.dv = function(args)
 
     elseif subcommand == "mode" then
         local newMode = parts[2]
-        if not newMode or (newMode ~= "off" and newMode ~= "chat" and newMode ~= "replace") then
-            chat.Send("[DiceVision] Usage: /dv mode <off|chat|replace>")
+        if not newMode or (newMode ~= "off" and newMode ~= "replace") then
+            chat.Send("[DiceVision] Usage: /dv mode <off|replace>")
             chat.Send("[DiceVision] Current mode: " .. DiceVision.mode)
             return
         end
@@ -962,11 +994,6 @@ Commands.dv = function(args)
         if newMode == "off" then
             stopPolling()
             removeRollInterceptor()
-        elseif newMode == "chat" then
-            removeRollInterceptor()
-            if DiceVision.connected then
-                startPolling()
-            end
         elseif newMode == "replace" then
             installRollInterceptor()
             -- Don't start polling here - wait for ability test to trigger it
@@ -1146,14 +1173,13 @@ Commands.dv = function(args)
   /dv connect <code>  - Connect to DiceVision session
   /dv disconnect      - Disconnect from session
   /dv status          - Show connection status
-  /dv mode <mode>     - Set mode: off, chat, or replace
+  /dv mode <mode>     - Set mode: off or replace
   /dv config          - Configure settings (longpoll)
   /dv rules           - Configure dice processing rules
   /dv test            - Test API connection
 
 Modes:
   off     - DiceVision disabled
-  chat    - Physical rolls shown in chat (alongside virtual)
   replace - Physical rolls replace virtual dice
 ]=])
     end

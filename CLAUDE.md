@@ -34,7 +34,7 @@ This repository contains a mod that integrates physical dice recognition (DiceVi
 - `/dv connect <code>` - Connect to DiceVision session
 - `/dv disconnect` - Disconnect
 - `/dv status` - Show connection status
-- `/dv mode <off|chat|replace>` - Set operation mode
+- `/dv mode <off|replace>` - Set operation mode
 - `/dv rules <subcommand>` - Configure dice processing rules (map, keep, clamp, clear)
 
 ## Common Tasks
