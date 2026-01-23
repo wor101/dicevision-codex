@@ -33,8 +33,9 @@ local diceVisionPanelStyles = {
     {
         classes = "dvButton",
         bgcolor = "white",
-        width = 60,
-        height = 60,
+        autosizeimage = true,
+        maxWidth = 120,
+        maxHeight = 50,
         valign = "center",
         halign = "center",
         saturation = 0.7,
