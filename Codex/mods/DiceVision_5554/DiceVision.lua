@@ -62,6 +62,12 @@ for dieType, mappings in pairs(DEFAULT_RULES.valueMappings) do
 end
 
 -- ============================================================================
+-- Store Original dmhub.Roll (for wrapper)
+-- ============================================================================
+
+local originalDmhubRoll = dmhub.Roll
+
+-- ============================================================================
 -- Utility Functions
 -- ============================================================================
 
@@ -466,7 +472,7 @@ end
 -- Forward Declarations
 -- ============================================================================
 
-local startPolling          -- Used by RollDialog_BeforeRoll
+local startPolling          -- Used by dmhub.Roll wrapper
 local stopPolling
 local removeRollInterceptor
 local checkRollTimeout      -- Used by longPollForRolls
@@ -790,7 +796,7 @@ handlePendingRoll = function(rollData)
         end
     end
 
-    dmhub.Roll(rollArgs)
+    originalDmhubRoll(rollArgs)
     return true
 end
 
@@ -820,63 +826,6 @@ checkRollTimeout = function()
             DiceVision.panelRequestId = generateRequestId()
         end
     end
-end
-
--- ============================================================================
--- RollDialog Hook (called from RollDialog.lua before dmhub.Roll)
--- ============================================================================
-
-RollDialog_BeforeRoll = function(context)
-    if not context then return nil end
-    if not DiceVision then return nil end
-
-    if DiceVision.mode ~= "replace" or not DiceVision.connected then
-        return nil
-    end
-
-    if DiceVision.waitingForRoll then
-        return nil
-    end
-
-    print("[DiceVision] Hook received context.boons:", context.boons)
-    print("[DiceVision] Hook received context.roll:", context.roll)
-
-    local edges, banes = SplitBoons(context.boons)
-    print("[DiceVision] After SplitBoons - edges:", edges, "banes:", banes)
-
-    if edges == 0 and banes == 0 and context.roll then
-        edges, banes = ParseBoonsFromRollString(context.roll)
-        if edges > 0 or banes > 0 then
-            print("[DiceVision] Parsed boons from roll string - edges:", edges, "banes:", banes)
-        end
-    end
-
-    DiceVision.pendingRoll = {
-        rollArgs = context.rollArgs,
-        originalRoll = context.roll,
-        description = context.description,
-        edges = edges,
-        banes = banes,
-        multitargets = context.multitargets,
-    }
-
-    DiceVision.waitingForRoll = true
-    DiceVision.rollStartTime = dmhub.Time() * 1000
-    DiceVision.currentRequestId = generateRequestId()
-
-    -- Start polling now (will send mode=waiting immediately)
-    if DiceVision.connected and not DiceVision.isPolling then
-        startPolling()
-    end
-
-    showWaitingDialog()
-    chat.Send("[DiceVision] Waiting for physical dice...")
-
-    return "intercept"
-end
-
-local function installRollInterceptor()
-    -- Hook is now in DSRollDialog.lua, no installation needed
 end
 
 removeRollInterceptor = function()
@@ -994,11 +943,8 @@ Commands.dv = function(args)
         if newMode == "off" then
             stopPolling()
             removeRollInterceptor()
-        elseif newMode == "replace" then
-            installRollInterceptor()
-            -- Don't start polling here - wait for ability test to trigger it
-            -- This ensures the first request sends mode=waiting immediately
         end
+        -- No action needed for replace mode - dmhub.Roll wrapper handles interception
 
         chat.Send("[DiceVision] Mode changed: " .. oldMode .. " -> " .. newMode)
 
@@ -1186,5 +1132,62 @@ Modes:
 end
 
 Commands.dicevision = Commands.dv
+
+-- ============================================================================
+-- dmhub.Roll Wrapper (Self-Contained Roll Interception)
+-- ============================================================================
+
+-- Check if a roll should be intercepted
+-- Matches behavior: intercept ALL rolls when connected in replace mode
+local function shouldInterceptRoll(rollArgs)
+    if not DiceVision.connected then return false end
+    if DiceVision.mode ~= "replace" then return false end
+    if not rollArgs then return false end
+    if DiceVision.waitingForRoll then return false end  -- Already waiting
+
+    -- Identify roll dialog rolls by their structure (has callbacks + properties)
+    if not rollArgs.properties then return false end
+    if not rollArgs.begin or not rollArgs.complete then return false end
+
+    return true
+end
+
+-- Install wrapper to intercept rolls
+dmhub.Roll = function(rollArgs)
+    if shouldInterceptRoll(rollArgs) then
+        -- Extract boons from roll string
+        local edges, banes = ParseBoonsFromRollString(rollArgs.roll or "")
+
+        print("[DiceVision] Intercepting roll via dmhub.Roll wrapper")
+        print("[DiceVision] Roll string:", rollArgs.roll or "nil")
+        print("[DiceVision] Parsed edges:", edges, "banes:", banes)
+
+        -- Store pending roll context
+        DiceVision.pendingRoll = {
+            rollArgs = rollArgs,
+            originalRoll = rollArgs.roll,
+            description = rollArgs.description,
+            edges = edges,
+            banes = banes,
+            multitargets = rollArgs.properties and rollArgs.properties.multitargets,
+        }
+
+        DiceVision.waitingForRoll = true
+        DiceVision.rollStartTime = dmhub.Time() * 1000
+        DiceVision.currentRequestId = generateRequestId()
+
+        -- Start polling now (will send mode=waiting immediately)
+        if DiceVision.connected and not DiceVision.isPolling then
+            startPolling()
+        end
+
+        showWaitingDialog()
+        chat.Send("[DiceVision] Waiting for physical dice...")
+
+        return nil  -- Intercept - don't execute roll yet
+    end
+
+    return originalDmhubRoll(rollArgs)
+end
 
 print("DV: DiceVision script loaded")
