@@ -33,9 +33,11 @@ local diceVisionPanelStyles = {
     {
         classes = "dvButton",
         bgcolor = "white",
+        width = "auto",
+        height = "auto",
         autosizeimage = true,
         maxWidth = 120,
-        maxHeight = 50,
+        maxHeight = 60,
         valign = "center",
         halign = "center",
         saturation = 0.7,
@@ -122,8 +124,13 @@ CreateDiceVisionPanel = function()
 
         gui.Panel{
             interactable = false,
-            width = "100%",
-            height = "100%",
+            width = "auto",
+            height = "auto",
+            autosizeimage = true,
+            maxWidth = 120,
+            maxHeight = 60,
+            halign = "center",
+            valign = "center",
             bgimage = "ui-icons/dsdice/djordice-2d10.png",
             bgcolor = diceStyle.trimcolor,
         },
@@ -133,11 +140,10 @@ CreateDiceVisionPanel = function()
         width = "auto",
         height = "auto",
         halign = "center",
-        valign = "bottom",
+        valign = "center",
         fontSize = 10,
         color = "#cccccc",
         text = "Roll Dice",
-        bmargin = 2,
     }
 
     local resultPanel = gui.Panel{
@@ -146,7 +152,6 @@ CreateDiceVisionPanel = function()
         styles = diceVisionPanelStyles,
         bgimage = "panels/square.png",
         bgcolor = "clear",
-        flow = "vertical",
 
         thinkTime = 0.2,
         think = function(element)
@@ -165,12 +170,12 @@ CreateDiceVisionPanel = function()
 
         gui.Panel{
             width = "100%",
-            height = "80%",
+            height = "100%",
             halign = "center",
             valign = "center",
             diceButton,
+            statusLabel,
         },
-        statusLabel,
     }
 
     updateState()
