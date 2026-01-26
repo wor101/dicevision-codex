@@ -3182,10 +3182,7 @@ function GameHud.CreateRollDialog(self)
 
                 g_activeRollArgs = rollArgs
 
-                -- Hook for external mods to intercept rolls (e.g., DiceVision physical dice)
-                -- This hook is OPTIONAL - if no mod defines RollDialog_BeforeRoll, rolls proceed normally
-                -- Returns "intercept" if the mod wants to handle the roll itself
-                -- In that case, we skip dmhub.Roll - the mod will call it later with modified args
+                -- Hook for external mods to intercept rolls
                 local hookResult = nil
                 if RollDialog_BeforeRoll then
                     hookResult = RollDialog_BeforeRoll({
@@ -3202,11 +3199,10 @@ function GameHud.CreateRollDialog(self)
                         guid = rollArgs.guid,
                         modifiers = modifiersUsed,
                         multitargets = multitargetsUsed,
-                        boons = m_boons,  -- Edge/Bane state for DiceVision
+                        boons = m_boons,
                     })
                 end
 
-                -- If hook returns "intercept", the mod will handle calling dmhub.Roll
                 if hookResult == "intercept" then
                     return
                 end

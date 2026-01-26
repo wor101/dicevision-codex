@@ -822,63 +822,6 @@ checkRollTimeout = function()
     end
 end
 
--- ============================================================================
--- RollDialog Hook (called from RollDialog.lua before dmhub.Roll)
--- ============================================================================
-
-RollDialog_BeforeRoll = function(context)
-    if not context then return nil end
-    if not DiceVision then return nil end
-
-    if DiceVision.mode ~= "replace" or not DiceVision.connected then
-        return nil
-    end
-
-    if DiceVision.waitingForRoll then
-        return nil
-    end
-
-    print("[DiceVision] Hook received context.boons:", context.boons)
-    print("[DiceVision] Hook received context.roll:", context.roll)
-
-    local edges, banes = SplitBoons(context.boons)
-    print("[DiceVision] After SplitBoons - edges:", edges, "banes:", banes)
-
-    if edges == 0 and banes == 0 and context.roll then
-        edges, banes = ParseBoonsFromRollString(context.roll)
-        if edges > 0 or banes > 0 then
-            print("[DiceVision] Parsed boons from roll string - edges:", edges, "banes:", banes)
-        end
-    end
-
-    DiceVision.pendingRoll = {
-        rollArgs = context.rollArgs,
-        originalRoll = context.roll,
-        description = context.description,
-        edges = edges,
-        banes = banes,
-        multitargets = context.multitargets,
-    }
-
-    DiceVision.waitingForRoll = true
-    DiceVision.rollStartTime = dmhub.Time() * 1000
-    DiceVision.currentRequestId = generateRequestId()
-
-    -- Start polling now (will send mode=waiting immediately)
-    if DiceVision.connected and not DiceVision.isPolling then
-        startPolling()
-    end
-
-    showWaitingDialog()
-    chat.Send("[DiceVision] Waiting for physical dice...")
-
-    return "intercept"
-end
-
-local function installRollInterceptor()
-    -- Hook is now in DSRollDialog.lua, no installation needed
-end
-
 removeRollInterceptor = function()
     DiceVision.pendingRoll = nil
     DiceVision.waitingForRoll = false
@@ -994,11 +937,8 @@ Commands.dv = function(args)
         if newMode == "off" then
             stopPolling()
             removeRollInterceptor()
-        elseif newMode == "replace" then
-            installRollInterceptor()
-            -- Don't start polling here - wait for ability test to trigger it
-            -- This ensures the first request sends mode=waiting immediately
         end
+        -- No action needed for replace mode - dmhub.Roll wrapper handles interception
 
         chat.Send("[DiceVision] Mode changed: " .. oldMode .. " -> " .. newMode)
 
@@ -1186,5 +1126,50 @@ Modes:
 end
 
 Commands.dicevision = Commands.dv
+
+-- ============================================================================
+-- RollDialog Hook (called from DSRollDialog.lua before dmhub.Roll)
+-- ============================================================================
+
+RollDialog_BeforeRoll = function(context)
+    if not context then return nil end
+    if not DiceVision then return nil end
+
+    if DiceVision.mode ~= "replace" or not DiceVision.connected then
+        return nil
+    end
+
+    if DiceVision.waitingForRoll then
+        return nil
+    end
+
+    local edges, banes = SplitBoons(context.boons)
+
+    if edges == 0 and banes == 0 and context.roll then
+        edges, banes = ParseBoonsFromRollString(context.roll)
+    end
+
+    DiceVision.pendingRoll = {
+        rollArgs = context.rollArgs,
+        originalRoll = context.roll,
+        description = context.description,
+        edges = edges,
+        banes = banes,
+        multitargets = context.multitargets,
+    }
+
+    DiceVision.waitingForRoll = true
+    DiceVision.rollStartTime = dmhub.Time() * 1000
+    DiceVision.currentRequestId = generateRequestId()
+
+    if DiceVision.connected and not DiceVision.isPolling then
+        startPolling()
+    end
+
+    showWaitingDialog()
+    chat.Send("[DiceVision] Waiting for physical dice...")
+
+    return "intercept"
+end
 
 print("DV: DiceVision script loaded")

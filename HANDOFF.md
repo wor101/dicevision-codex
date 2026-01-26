@@ -323,6 +323,26 @@ This design allows DiceVision to work on machines with the modified DSRollDialog
 
 ---
 
+## Why DiceVision Requires DSRollDialog.lua Modification
+
+We explored making DiceVision fully self-contained (no modifications to Codex core files). This is **not possible** due to engine limitations:
+
+| Approach Attempted | Why It Failed |
+|-------------------|---------------|
+| Wrap `dmhub.Roll()` | Read-only engine property - Lua cannot reassign. Attempting to set causes: `Could not set property` error at load time. |
+| File shadowing | Mod IDs make require paths unique (`Draw_Steel_UI_bd58.DSRollDialog`) - cannot override core files. |
+| Global event system | No roll-specific events exist in Codex that fire before `dmhub.Roll()` is called. |
+| UI events (`prepareBeforeRollProperties`) | Fire too late in the flow - roll has already been initiated by the time they trigger. |
+
+**Conclusion**: The only working approach is the explicit `RollDialog_BeforeRoll` hook in DSRollDialog.lua. This hook must:
+1. Be placed immediately before the `dmhub.Roll(rollArgs)` call
+2. Check for the global `RollDialog_BeforeRoll` function
+3. Return early (skip `dmhub.Roll`) if the hook returns `"intercept"`
+
+This is an accepted limitation. Future Codex updates to DSRollDialog.lua may require re-applying the hook.
+
+---
+
 ## Key Integration Points with Codex
 
 | Codex Function | Usage |
