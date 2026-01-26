@@ -33,9 +33,11 @@ local diceVisionPanelStyles = {
     {
         classes = "dvButton",
         bgcolor = "white",
+        width = "auto",
+        height = "auto",
         autosizeimage = true,
         maxWidth = 120,
-        maxHeight = 50,
+        maxHeight = 60,
         valign = "center",
         halign = "center",
         saturation = 0.7,
@@ -56,6 +58,11 @@ local diceVisionPanelStyles = {
         scale = 1.1,
         brightness = 1.2,
     },
+    {
+        classes = {"dvButton", "parent:hover"},
+        scale = 1.1,
+        brightness = 1.2,
+    },
 }
 
 -- ============================================================================
@@ -69,6 +76,7 @@ CreateDiceVisionPanel = function()
     )
 
     local statusLabel
+    local statusShadow
     local diceButton
 
     local updateState = function()
@@ -77,13 +85,16 @@ CreateDiceVisionPanel = function()
             diceButton:SetClass("waiting", DiceVision.panelWaitingForRoll)
         end
         if statusLabel then
+            local text
             if not DiceVision.connected then
-                statusLabel.text = "Disconnected"
+                text = "Disconnected"
             elseif DiceVision.panelWaitingForRoll then
-                statusLabel.text = "Rolling..."
+                text = "Rolling..."
             else
-                statusLabel.text = "Roll Dice"
+                text = "Roll Dice"
             end
+            statusLabel.text = text
+            statusShadow.text = text
         end
     end
 
@@ -122,10 +133,34 @@ CreateDiceVisionPanel = function()
 
         gui.Panel{
             interactable = false,
-            width = "100%",
-            height = "100%",
+            width = "auto",
+            height = "auto",
+            autosizeimage = true,
+            maxWidth = 120,
+            maxHeight = 60,
+            halign = "center",
+            valign = "center",
             bgimage = "ui-icons/dsdice/djordice-2d10.png",
             bgcolor = diceStyle.trimcolor,
+        },
+    }
+
+    statusShadow = gui.Label{
+        width = "auto",
+        height = "auto",
+        halign = "center",
+        valign = "center",
+        fontFace = "Book",
+        fontSize = 10,
+        color = "black",
+        text = "Roll Dice",
+        x = 1,
+        y = 1,
+        styles = {
+            {
+                classes = "parent:hover",
+                scale = 1.1,
+            }
         },
     }
 
@@ -133,11 +168,17 @@ CreateDiceVisionPanel = function()
         width = "auto",
         height = "auto",
         halign = "center",
-        valign = "bottom",
+        valign = "center",
+        fontFace = "Book",
         fontSize = 10,
-        color = "#cccccc",
+        color = "white",
         text = "Roll Dice",
-        bmargin = 2,
+        styles = {
+            {
+                classes = "parent:hover",
+                scale = 1.1,
+            }
+        },
     }
 
     local resultPanel = gui.Panel{
@@ -146,7 +187,6 @@ CreateDiceVisionPanel = function()
         styles = diceVisionPanelStyles,
         bgimage = "panels/square.png",
         bgcolor = "clear",
-        flow = "vertical",
 
         thinkTime = 0.2,
         think = function(element)
@@ -165,12 +205,13 @@ CreateDiceVisionPanel = function()
 
         gui.Panel{
             width = "100%",
-            height = "80%",
+            height = "100%",
             halign = "center",
             valign = "center",
             diceButton,
+            statusShadow,
+            statusLabel,
         },
-        statusLabel,
     }
 
     updateState()
