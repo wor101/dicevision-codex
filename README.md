@@ -20,11 +20,26 @@ DiceVision lets you roll real, physical dice and have those results used in your
 
 ## Installation
 
-This mod is installed through Codex's built-in mod manager:
+### Basic Install (Chat/Off Modes)
+
+Install through Codex's built-in mod manager:
 
 1. Open Codex and go to the mod manager
 2. Search for "DiceVision"
 3. Enable the mod
+
+### Replace Mode Setup (Additional Steps)
+
+Replace mode requires a hook in Codex's `DSRollDialog.lua` to intercept rolls before they reach the engine. Until this hook is merged into the official Codex repo, three local modifications are needed:
+
+1. **DiceVision mod files** - Installed via the mod manager (step above)
+2. **DSRollDialog.lua hook** - Add the `RollDialog_BeforeRoll` hook to `Draw_Steel_UI_bd58/DSRollDialog.lua` immediately before the `dmhub.Roll(rollArgs)` call (see [HANDOFF.md](HANDOFF.md) for the exact code)
+3. **Enable local file loading** - Set `"checkedout": true` in `Draw_Steel_UI_bd58/status.json` so Codex loads the locally modified DSRollDialog.lua instead of the server version
+
+The `status.json` file is located at:
+- **Windows**: `C:\Users\<username>\AppData\LocalLow\MCDM\Codex\mods\Draw_Steel_UI_bd58\status.json`
+
+Without the checkout flag, Codex ignores local file edits and loads the server version of DSRollDialog.lua, even if the hook has been added to the file on disk.
 
 ## Quick Start
 

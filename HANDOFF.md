@@ -310,7 +310,25 @@ The `RollDialog_BeforeRoll` hook in DSRollDialog.lua is OPTIONAL:
 
 This design allows DiceVision to work on machines with the modified DSRollDialog.lua while failing gracefully on machines with the stock version.
 
-**Important**: DSRollDialog.lua modifications are LOCAL ONLY - they do NOT propagate to other players! For DiceVision roll replacement to work on another player's machine, they would need both the modified DSRollDialog.lua and the DiceVision mod installed locally.
+**Important**: DSRollDialog.lua modifications are LOCAL ONLY - they do NOT propagate to other players! For DiceVision roll replacement to work on another player's machine, they would need all three local requirements listed below.
+
+---
+
+## Local Installation Requirements (Replace Mode)
+
+For DiceVision's replace mode to function, three things must be in place on the user's local machine:
+
+| # | Requirement | Details |
+|---|-------------|---------|
+| 1 | **DiceVision mod files** | `DiceVision_5554/` folder with `DiceVision.lua`, `DVDicePanel.lua`, and `Main.lua` in the Codex mods directory |
+| 2 | **DSRollDialog.lua hook** | The `RollDialog_BeforeRoll` hook added to `Draw_Steel_UI_bd58/DSRollDialog.lua` (lines 3203-3227), placed immediately before the `dmhub.Roll(rollArgs)` call |
+| 3 | **Draw_Steel_UI checkout flag** | `Draw_Steel_UI_bd58/status.json` must have `"checkedout": true` so Codex loads the locally modified DSRollDialog.lua instead of the server version |
+
+**Why the checkout flag matters**: Codex uses `status.json` in each mod folder to determine whether to load local files or the server version. After a fresh install, `"checkedout"` defaults to `false`, which means Codex ignores local file modifications to DSRollDialog.lua -- even if the file on disk contains the hook. Setting `"checkedout": true` tells Codex to use the local copy.
+
+**Location of status.json** (Windows): `C:\Users\<username>\AppData\LocalLow\MCDM\Codex\mods\Draw_Steel_UI_bd58\status.json`
+
+**Note**: Chat and off modes do NOT require requirements 2 or 3 -- only replace mode needs the hook and checkout flag.
 
 ---
 
