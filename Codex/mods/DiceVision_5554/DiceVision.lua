@@ -602,14 +602,43 @@ longPollForRolls = function()
                     handleDiceVisionRoll(roll)
                 end
             end
-            -- No recursive call - one poll per roll request
-            -- Next roll will call startPolling() fresh with mode=waiting
             DiceVision.isPolling = false
+
+            -- Replace mode timeout: if still waiting, roll didn't arrive
+            if DiceVision.waitingForRoll then
+                chat.Send("[DiceVision] Timeout waiting for physical dice. Roll cancelled - try again.")
+                DiceVision.waitingForRoll = false
+                DiceVision.pendingRoll = nil
+                DiceVision.currentRequestId = generateRequestId()
+                hideWaitingDialog()
+            end
+
+            -- Panel timeout: if still waiting, roll didn't arrive
+            if DiceVision.panelWaitingForRoll then
+                chat.Send("[DiceVision] Timeout waiting for dice. Try again.")
+                DiceVision.panelWaitingForRoll = false
+                DiceVision.panelRequestId = generateRequestId()
+            end
         end,
         error = function(err, statusCode)
             printf("[DiceVision] Long-poll error: %s (status: %s)", tostring(err), tostring(statusCode or "unknown"))
-            -- No retry - next roll will start fresh polling
             DiceVision.isPolling = false
+
+            -- Replace mode: clear waiting state on error
+            if DiceVision.waitingForRoll then
+                chat.Send("[DiceVision] Connection error. Roll cancelled - try again.")
+                DiceVision.waitingForRoll = false
+                DiceVision.pendingRoll = nil
+                DiceVision.currentRequestId = generateRequestId()
+                hideWaitingDialog()
+            end
+
+            -- Panel: clear waiting state on error
+            if DiceVision.panelWaitingForRoll then
+                chat.Send("[DiceVision] Connection error. Try again.")
+                DiceVision.panelWaitingForRoll = false
+                DiceVision.panelRequestId = generateRequestId()
+            end
         end,
     }
 end
