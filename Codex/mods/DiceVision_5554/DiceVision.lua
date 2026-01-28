@@ -69,6 +69,9 @@ local function generateRequestId()
     return tostring(os.time()) .. "-" .. tostring(math.random(1000, 9999))
 end
 
+-- Forward declaration for functions called before definition
+local hideWaitingDialog
+
 -- Expose for DVDicePanel.lua
 DiceVision.generateRequestId = generateRequestId
 
@@ -688,7 +691,7 @@ local function showWaitingDialog()
     chat.Send("[DiceVision] Waiting for physical dice roll...")
 end
 
-local function hideWaitingDialog()
+hideWaitingDialog = function()
     -- TODO: Hide the waiting indicator
 end
 
