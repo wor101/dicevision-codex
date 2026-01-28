@@ -607,13 +607,20 @@ longPollForRolls = function()
             end
             DiceVision.isPolling = false
 
-            -- Replace mode timeout: if still waiting, roll didn't arrive
+            -- Replace mode timeout: if still waiting, fall back to virtual dice
             if DiceVision.waitingForRoll then
-                chat.Send("[DiceVision] Timeout waiting for physical dice. Roll cancelled - try again.")
+                local rollArgs = DiceVision.pendingRoll and DiceVision.pendingRoll.rollArgs
+
+                chat.Send("[DiceVision] Physical dice timeout. Falling back to virtual dice...")
                 DiceVision.waitingForRoll = false
                 DiceVision.pendingRoll = nil
                 DiceVision.currentRequestId = generateRequestId()
                 hideWaitingDialog()
+                stopPolling()
+
+                if rollArgs then
+                    dmhub.Roll(rollArgs)
+                end
             end
 
             -- Panel timeout: if still waiting, roll didn't arrive
@@ -627,13 +634,20 @@ longPollForRolls = function()
             printf("[DiceVision] Long-poll error: %s (status: %s)", tostring(err), tostring(statusCode or "unknown"))
             DiceVision.isPolling = false
 
-            -- Replace mode: clear waiting state on error
+            -- Replace mode: fall back to virtual dice on error
             if DiceVision.waitingForRoll then
-                chat.Send("[DiceVision] Connection error. Roll cancelled - try again.")
+                local rollArgs = DiceVision.pendingRoll and DiceVision.pendingRoll.rollArgs
+
+                chat.Send("[DiceVision] Connection error. Falling back to virtual dice...")
                 DiceVision.waitingForRoll = false
                 DiceVision.pendingRoll = nil
                 DiceVision.currentRequestId = generateRequestId()
                 hideWaitingDialog()
+                stopPolling()
+
+                if rollArgs then
+                    dmhub.Roll(rollArgs)
+                end
             end
 
             -- Panel: clear waiting state on error
