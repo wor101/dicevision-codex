@@ -146,6 +146,7 @@ CreateDiceVisionPanel = function()
     }
 
     statusShadow = gui.Label{
+        interactable = false,
         width = "auto",
         height = "auto",
         halign = "center",
@@ -165,6 +166,7 @@ CreateDiceVisionPanel = function()
     }
 
     statusLabel = gui.Label{
+        interactable = false,
         width = "auto",
         height = "auto",
         halign = "center",
