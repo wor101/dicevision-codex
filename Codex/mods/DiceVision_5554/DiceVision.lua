@@ -322,6 +322,7 @@ DiceVisionRollMessage.modifier = 0
 DiceVisionRollMessage.total = 0
 DiceVisionRollMessage.tier = 1
 DiceVisionRollMessage.tokenid = nil
+DiceVisionRollMessage.rollSource = "unknown"  -- "panel" | "ability"
 
 function DiceVisionRollMessage.CreateDiePanel(faces, value)
     local diceStyle = dmhub.GetDiceStyling(
@@ -383,33 +384,59 @@ function DiceVisionRollMessage.Render(self, message)
     local total = self:try_get("total") or 0
     local tier = self:try_get("tier") or 1
     local description = self:try_get("description") or "Roll"
+    local rollSource = self:try_get("rollSource") or "unknown"
 
-    -- Get token and create portrait panel if available
-    local token = self:GetToken()
+    -- Token panel only for panel rolls
     local tokenPanel = nil
-    if token ~= nil then
-        tokenPanel = gui.Panel{
-            flow = "vertical",
-            width = "auto",
-            height = "auto",
-            halign = "left",
-            valign = "center",
-            rmargin = 8,
-
-            gui.CreateTokenImage(token, {
-                scale = 0.9,
-                halign = "center",
-            }),
-
-            gui.Label{
+    if rollSource == "panel" then
+        local token = self:GetToken()
+        if token ~= nil then
+            tokenPanel = gui.Panel{
+                flow = "vertical",
                 width = "auto",
                 height = "auto",
-                fontSize = 12,
-                bold = true,
-                color = "#ffffff",
-                halign = "center",
-                textAlignment = "center",
-                text = token.name,
+                halign = "left",
+                valign = "center",
+                rmargin = 8,
+
+                gui.CreateTokenImage(token, {
+                    scale = 0.9,
+                    halign = "center",
+                }),
+
+                gui.Label{
+                    width = "auto",
+                    height = "auto",
+                    fontSize = 12,
+                    bold = true,
+                    color = "#ffffff",
+                    halign = "center",
+                    textAlignment = "center",
+                    text = token.name,
+                },
+            }
+        end
+    end
+
+    -- Separator only for panel rolls (matches native dice panel styling)
+    local separator = nil
+    if rollSource == "panel" then
+        separator = gui.Panel{
+            bgimage = "panels/square.png",
+            width = "96%",
+            height = 1,
+            vmargin = 4,
+            halign = "center",
+            bgcolor = "white",
+            gradient = gui.Gradient{
+                point_a = {x = 0, y = 0},
+                point_b = {x = 1, y = 0},
+                stops = {
+                    { position = 0, color = "#ffffff00" },
+                    { position = 0.2, color = "#ffffffff" },
+                    { position = 0.8, color = "#ffffffff" },
+                    { position = 1, color = "#ffffff00" },
+                },
             },
         }
     end
@@ -473,34 +500,42 @@ function DiceVisionRollMessage.Render(self, message)
     return gui.Panel{
         width = "100%",
         height = "auto",
-        flow = "horizontal",
-        hpad = 8,
-        vpad = 8,
+        flow = "vertical",
 
-        tokenPanel,  -- Portrait on the left (nil is ignored)
+        separator,  -- Top line (nil for ability rolls)
 
         gui.Panel{
-            flow = "vertical",
-            width = tokenPanel and "100%-60" or "100%",
+            width = "100%",
             height = "auto",
+            flow = "horizontal",
+            hpad = 8,
+            vpad = 8,
 
-            gui.Label{
-                width = "100%",
-                height = "auto",
-                fontSize = 16,
-                bold = true,
-                color = "#ffffff",
-                text = description,
-            },
+            tokenPanel,  -- Portrait (nil for ability rolls)
+
             gui.Panel{
-                flow = "horizontal",
-                width = "100%",
+                flow = "vertical",
+                width = tokenPanel and "100%-60" or "100%",
                 height = "auto",
-                valign = "center",
-                diceRowPanel,
-                totalLabel,
+
+                gui.Label{
+                    width = "100%",
+                    height = "auto",
+                    fontSize = 16,
+                    bold = true,
+                    color = "#ffffff",
+                    text = description,
+                },
+                gui.Panel{
+                    flow = "horizontal",
+                    width = "100%",
+                    height = "auto",
+                    valign = "center",
+                    diceRowPanel,
+                    totalLabel,
+                },
+                tierLabel,
             },
-            tierLabel,
         },
     }
 end
@@ -733,6 +768,7 @@ postRollToChat = function(rollData)
         total = total,
         tier = tier,
         tokenid = DiceVision.panelTokenId,
+        rollSource = "panel",
     }
     chat.SendCustom(message)
     DiceVision.panelTokenId = nil  -- Clear after use
@@ -838,6 +874,7 @@ handlePendingRoll = function(rollData)
         total = finalTotal,
         tier = tier,
         tokenid = tokenid,
+        rollSource = "ability",
     }
     rollArgs.instant = true
 
