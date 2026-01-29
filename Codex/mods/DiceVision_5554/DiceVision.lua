@@ -36,6 +36,7 @@ DiceVision = {
     panelWaitingForRoll = false,
     panelPollStartTime = 0,
     panelRequestId = nil,
+    panelTokenId = nil,  -- Token ID for panel roll attribution
 }
 
 -- Default dice rules (applied on load and after "rules clear")
@@ -383,6 +384,36 @@ function DiceVisionRollMessage.Render(self, message)
     local tier = self:try_get("tier") or 1
     local description = self:try_get("description") or "Roll"
 
+    -- Get token and create portrait panel if available
+    local token = self:GetToken()
+    local tokenPanel = nil
+    if token ~= nil then
+        tokenPanel = gui.Panel{
+            flow = "vertical",
+            width = "auto",
+            height = "auto",
+            halign = "left",
+            valign = "center",
+            rmargin = 8,
+
+            gui.CreateTokenImage(token, {
+                scale = 0.9,
+                halign = "center",
+            }),
+
+            gui.Label{
+                width = "auto",
+                height = "auto",
+                fontSize = 12,
+                bold = true,
+                color = "#ffffff",
+                halign = "center",
+                textAlignment = "center",
+                text = token.name,
+            },
+        }
+    end
+
     local dicePanels = {}
     for i, die in ipairs(dice) do
         local faces = die.faces or 10
@@ -442,26 +473,35 @@ function DiceVisionRollMessage.Render(self, message)
     return gui.Panel{
         width = "100%",
         height = "auto",
-        flow = "vertical",
+        flow = "horizontal",
         hpad = 8,
         vpad = 8,
-        gui.Label{
-            width = "100%",
-            height = "auto",
-            fontSize = 16,
-            bold = true,
-            color = "#ffffff",
-            text = description,
-        },
+
+        tokenPanel,  -- Portrait on the left (nil is ignored)
+
         gui.Panel{
-            flow = "horizontal",
-            width = "100%",
+            flow = "vertical",
+            width = tokenPanel and "100%-60" or "100%",
             height = "auto",
-            valign = "center",
-            diceRowPanel,
-            totalLabel,
+
+            gui.Label{
+                width = "100%",
+                height = "auto",
+                fontSize = 16,
+                bold = true,
+                color = "#ffffff",
+                text = description,
+            },
+            gui.Panel{
+                flow = "horizontal",
+                width = "100%",
+                height = "auto",
+                valign = "center",
+                diceRowPanel,
+                totalLabel,
+            },
+            tierLabel,
         },
-        tierLabel,
     }
 end
 
@@ -692,8 +732,10 @@ postRollToChat = function(rollData)
         modifier = 0,
         total = total,
         tier = tier,
+        tokenid = DiceVision.panelTokenId,
     }
     chat.SendCustom(message)
+    DiceVision.panelTokenId = nil  -- Clear after use
     print(string.format("DBG: DiceVision roll posted to chat: total=%d, tier=%d", total, tier))
 end
 
