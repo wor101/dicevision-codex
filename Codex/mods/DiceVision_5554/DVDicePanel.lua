@@ -123,6 +123,18 @@ CreateDiceVisionPanel = function()
             DiceVision.panelWaitingForRoll = true
             DiceVision.panelPollStartTime = dmhub.Time() * 1000
 
+            -- Capture selected token for roll attribution
+            if dmhub.currentToken ~= nil then
+                DiceVision.panelTokenId = dmhub.currentToken.charid
+            else
+                local selectedTokens = dmhub.selectedOrPrimaryTokens
+                if selectedTokens and #selectedTokens > 0 then
+                    DiceVision.panelTokenId = selectedTokens[1].charid
+                else
+                    DiceVision.panelTokenId = nil
+                end
+            end
+
             if not DiceVision.isPolling then
                 DiceVision.startPolling()
             end

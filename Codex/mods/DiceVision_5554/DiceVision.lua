@@ -36,6 +36,7 @@ DiceVision = {
     panelWaitingForRoll = false,
     panelPollStartTime = 0,
     panelRequestId = nil,
+    panelTokenId = nil,  -- Token ID for panel roll attribution
 }
 
 -- Default dice rules (applied on load and after "rules clear")
@@ -692,8 +693,10 @@ postRollToChat = function(rollData)
         modifier = 0,
         total = total,
         tier = tier,
+        tokenid = DiceVision.panelTokenId,
     }
     chat.SendCustom(message)
+    DiceVision.panelTokenId = nil  -- Clear after use
     print(string.format("DBG: DiceVision roll posted to chat: total=%d, tier=%d", total, tier))
 end
 
