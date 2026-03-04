@@ -8,7 +8,8 @@ This repository contains a mod that integrates physical dice recognition (DiceVi
 | File | Purpose |
 |------|---------|
 | `Codex/mods/DiceVision_5554/DiceVision.lua` | Main mod - API polling, roll interception, chat display |
-| `Codex/mods/Draw_Steel_UI_bd58/DSRollDialog.lua` | Codex's roll dialog - has official `RollDialog.OnBeforeRoll` hook (line 3247) |
+| `Codex/mods/DiceVision_5554/DVDicePanel.lua` | Dice panel UI component |
+| `Codex/mods/DiceVision_5554/Main.lua` | Mod entry point |
 | `HANDOFF.md` | **Detailed technical documentation** - read this for implementation details |
 
 ## Architecture (High-Level)

@@ -1,2 +1,0 @@
---- @class LuaCorpseObject:LuaObjectComponent 
-LuaCorpseObject = {}

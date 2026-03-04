@@ -1,2 +1,0 @@
---- @class ImageAtlasAsset:ImageAsset 
-ImageAtlasAsset = {}
