@@ -549,6 +549,7 @@ local checkRollTimeout      -- Used by longPollForRolls
 local handlePendingRoll     -- Used by handleDiceVisionRoll
 local postRollToChat        -- Used by handleDiceVisionRoll
 local longPollForRolls      -- Recursive call
+local onBeforeRoll          -- Used by /dv connect, registered on RollDialog.OnBeforeRoll
 
 -- ============================================================================
 -- API Communication
@@ -1166,7 +1167,7 @@ Commands.dicevision = Commands.dv
 -- RollDialog.OnBeforeRoll Callback (official Codex hook API)
 -- ============================================================================
 
-local function onBeforeRoll(context)
+onBeforeRoll = function(context)
     if not context then return nil end
     if not DiceVision then return nil end
 
