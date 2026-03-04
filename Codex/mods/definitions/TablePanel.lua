@@ -1,2 +1,0 @@
---- @class TablePanel:Panel 
-TablePanel = {}

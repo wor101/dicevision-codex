@@ -1,2 +1,0 @@
---- @class LuaGoblinScriptDebugEntry 
-LuaGoblinScriptDebugEntry = {}
