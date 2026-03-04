@@ -3,6 +3,8 @@
 ## Project Overview
 This repository contains a mod that integrates physical dice recognition (DiceVision) with MCDM's Codex VTT for Draw Steel. Players can roll physical dice and have those results used in-game instead of virtual dice.
 
+**Official Codex repo**: https://github.com/VerisimLLC/draw-steel-codex (MIT licensed)
+
 ## Key Files
 
 | File | Purpose |
@@ -11,6 +13,7 @@ This repository contains a mod that integrates physical dice recognition (DiceVi
 | `Codex/mods/DiceVision_5554/DVDicePanel.lua` | Dice panel UI component |
 | `Codex/mods/DiceVision_5554/Main.lua` | Mod entry point |
 | `HANDOFF.md` | **Detailed technical documentation** - read this for implementation details |
+| [`DSRollDialog.lua`](https://github.com/VerisimLLC/draw-steel-codex/blob/main/Draw_Steel_UI_bd58/DSRollDialog.lua) | Official Codex file containing `RollDialog.OnBeforeRoll` hook (external) |
 
 ## Architecture (High-Level)
 1. User clicks "Roll Dice" in Codex

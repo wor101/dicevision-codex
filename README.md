@@ -15,7 +15,7 @@ DiceVision lets you roll real, physical dice and have those results used in your
 
 ## Requirements
 
-- MCDM Codex VTT
+- [MCDM Codex VTT](https://github.com/VerisimLLC/draw-steel-codex)
 - DiceVision account and session at [dicevision.dirtyowlbear.com](https://dicevision.dirtyowlbear.com)
 
 ## Installation

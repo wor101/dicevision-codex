@@ -40,7 +40,7 @@ C# engine processes roll with correct tier/damage
 
 ### DSRollDialog.lua (Official, Unmodified)
 
-The `RollDialog.OnBeforeRoll` callback is built into the official Codex codebase (`Draw_Steel_UI_bd58/DSRollDialog.lua`). DiceVision no longer needs to modify this file.
+The `RollDialog.OnBeforeRoll` callback is built into the official Codex codebase ([`Draw_Steel_UI_bd58/DSRollDialog.lua`](https://github.com/VerisimLLC/draw-steel-codex/blob/main/Draw_Steel_UI_bd58/DSRollDialog.lua)). DiceVision no longer needs to modify this file.
 
 **How it works (Lines 3247-3268):**
 
@@ -326,7 +326,7 @@ DiceVision's replace mode requires only the DiceVision mod files installed in Co
 |---|-------------|---------|
 | 1 | **DiceVision mod files** | `DiceVision_5554/` folder with `DiceVision.lua`, `DVDicePanel.lua`, and `Main.lua` in the Codex mods directory |
 
-No core Codex file modifications are needed. The `RollDialog.OnBeforeRoll` callback is built into the official DSRollDialog.lua.
+No core Codex file modifications are needed. The `RollDialog.OnBeforeRoll` callback is built into the official DSRollDialog.lua. See the [official Codex repo](https://github.com/VerisimLLC/draw-steel-codex) for the source.
 
 ---
 
