@@ -17,7 +17,7 @@ setting{
 		},
 		{
 			value = "dm",
-			text = cond(dmhub.isDM, "Visible to GM only", "Visible to you and GM"),
+			text = cond(dmhub.isDM, "Visible to Director only", "Visible to you and Director"),
 		}
 	}
 }
@@ -37,7 +37,7 @@ local g_rollOptionsDM = {
 	},
 	{
 		id = "dm",
-		text = "Visible to GM only",
+		text = "Visible to Director only",
 	},
 }
 
@@ -48,7 +48,7 @@ local g_rollOptionsPlayer = {
 	},
 	{
 		id = "dm",
-		text = "Visible to you and GM",
+		text = "Visible to you and Director",
 	},
 }
 
@@ -1597,7 +1597,7 @@ function GameHud.CreateRollDialog(self)
 				local beginRollFn = beginRoll
 				local completeRollFn = completeRoll
 				local creatureUsed = creature
-				local modifiersUsed = dmhub.DeepCopy(activeModifiers)
+				local modifiersUsed = DeepCopy(activeModifiers)
 
 				local tokenid = nil
 				
@@ -1608,36 +1608,6 @@ function GameHud.CreateRollDialog(self)
 				rollProperties = rollProperties or RollProperties.new{}
 				if not criticalHit:HasClass("collapsed-anim") then
 					rollProperties.criticalHitDamage = criticalHit.value
-				end
-
-				-- Hook for external mods to intercept rolls (e.g., DiceVision physical dice)
-				-- If RollDialog_BeforeRoll is defined and returns true, the roll is handled externally
-				print("DBG: RollDialog submit - checking for RollDialog_BeforeRoll hook")
-				print("DBG: RollDialog_BeforeRoll type: " .. type(RollDialog_BeforeRoll))
-				if RollDialog_BeforeRoll then
-					print("DBG: RollDialog - calling RollDialog_BeforeRoll hook")
-					local handled = RollDialog_BeforeRoll({
-						roll = rollInput.text,
-						description = m_options.description,
-						creature = creature,
-						tokenid = tokenid,
-						properties = rollProperties,
-						dmonly = dmonly,
-						instant = instant,
-						silent = rollIsSilent,
-						delay = delayRoll,
-						guid = resultPanel.data.rollid,
-						beginRoll = beginRollFn,
-						completeRoll = completeRollFn,
-						activeRoll = activeRollFn,
-						modifiers = modifiersUsed,
-						inspirationUsed = inspirationUsed,
-						creatureUsed = creatureUsed,
-					})
-					if handled then
-						chat.PreviewChat('')
-						return
-					end
 				end
 
 				local activeRoll = dmhub.Roll{

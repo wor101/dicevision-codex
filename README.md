@@ -28,18 +28,9 @@ Install through Codex's built-in mod manager:
 2. Search for "DiceVision"
 3. Enable the mod
 
-### Replace Mode Setup (Additional Steps)
+### Replace Mode
 
-Replace mode requires a hook in Codex's `DSRollDialog.lua` to intercept rolls before they reach the engine. Until this hook is merged into the official Codex repo, three local modifications are needed:
-
-1. **DiceVision mod files** - Installed via the mod manager (step above)
-2. **DSRollDialog.lua hook** - Add the `RollDialog_BeforeRoll` hook to `Draw_Steel_UI_bd58/DSRollDialog.lua` immediately before the `dmhub.Roll(rollArgs)` call (see [HANDOFF.md](HANDOFF.md) for the exact code)
-3. **Enable local file loading** - Set `"checkedout": true` in `Draw_Steel_UI_bd58/status.json` so Codex loads the locally modified DSRollDialog.lua instead of the server version
-
-The `status.json` file is located at:
-- **Windows**: `C:\Users\<username>\AppData\LocalLow\MCDM\Codex\mods\Draw_Steel_UI_bd58\status.json`
-
-Without the checkout flag, Codex ignores local file edits and loads the server version of DSRollDialog.lua, even if the hook has been added to the file on disk.
+Replace mode uses the official `RollDialog.OnBeforeRoll` callback built into Codex's DSRollDialog.lua. No additional setup is needed beyond installing the mod — DiceVision registers its callback automatically when you connect to a session.
 
 ## Quick Start
 
@@ -113,7 +104,7 @@ DiceVision fully supports Draw Steel's edge and bane system:
 ## How It Works
 
 1. You click "Roll Dice" in Codex
-2. DiceVision intercepts the roll (in replace mode)
+2. Codex calls `RollDialog.OnBeforeRoll` — DiceVision intercepts the roll (in replace mode)
 3. Codex displays "Waiting for physical dice..."
 4. You roll your physical dice
 5. DiceVision's API sends the dice values to the mod
