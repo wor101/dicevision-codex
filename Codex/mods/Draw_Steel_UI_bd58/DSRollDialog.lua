@@ -7,6 +7,10 @@ dmhub.HoldAmendableRollOpen = function()
     return g_holdingRollOpen
 end
 
+RollDialog = {
+    OnBeforeRoll = false,
+}
+
 local g_activeRoll = nil
 local g_activeRollArgs = nil
 
@@ -25,7 +29,7 @@ setting {
         },
         {
             value = "dm",
-            text = cond(dmhub.isDM, "Visible to GM only", "Visible to you and GM"),
+            text = cond(dmhub.isDM, "Visible to Director only", "Visible to you and Director"),
         }
     }
 }
@@ -45,7 +49,7 @@ local g_rollOptionsDM = {
     },
     {
         id = "dm",
-        text = "Visible to GM only",
+        text = "Visible to Director only",
     },
 }
 
@@ -1025,8 +1029,16 @@ function GameHud.CreateRollDialog(self)
                 children[i] = panel
             end
 
+            local visibleCount = 0
             for i = 1, #children do
-                children[i]:SetClass("collapsed", i > #maintarget.triggers)
+                local hidden = i > #maintarget.triggers
+                if not hidden and maintarget.triggers[i] and maintarget.triggers[i].failsRequirement then
+                    hidden = true
+                end
+                children[i]:SetClass("collapsed", hidden)
+                if not hidden then
+                    visibleCount = visibleCount + 1
+                end
                 children[i]:FireEvent("cleartrigger")
             end
 
@@ -1063,6 +1075,16 @@ function GameHud.CreateRollDialog(self)
                     local key = trigger.modifier.guid
                     if not targetAll then
                         key = key .. target.token.charid
+                    end
+
+                    -- Skip triggers that fail roll requirements
+                    if trigger.failsRequirement then
+                        if m_openedTriggers[key] ~= nil then
+                            local activeTrigger = m_openedTriggers[key]
+                            activeTrigger.dismissed = true
+                            activeTrigger._tmp_refreshTime = 0
+                        end
+                        goto continueTriggerThink
                     end
 
                     if m_openedTriggers[key] == nil then
@@ -1119,6 +1141,7 @@ function GameHud.CreateRollDialog(self)
                         activeTrigger.dismissed = trigger.dismissed
                         trigger._tmp_refreshTime = 0
                     end
+                    ::continueTriggerThink::
                 end
             end
 
@@ -1683,7 +1706,6 @@ function GameHud.CreateRollDialog(self)
                 local surgesAvailable = 0
                 if creature ~= nil then
                     surgesAvailable = creature:GetAvailableSurges()
-                    print("SURGES:: BASE =", surgesAvailable)
                 end
 
                 if rollProperties ~= nil then
@@ -1698,8 +1720,6 @@ function GameHud.CreateRollDialog(self)
                         end
                     end
                 end
-
-                print("SURGES:: HAVE SURGES", surgesAvailable)
 
                 m_lastCalculationOptions = calculationOptions
                 calculationOptions = calculationOptions or {}
@@ -1799,7 +1819,6 @@ function GameHud.CreateRollDialog(self)
                 local surgesAvailable = 0
                 if creature ~= nil then
                     surgesAvailable = creature:GetAvailableSurges()
-                    print("SURGES:: BASE =", surgesAvailable)
                 end
 
                 if rollProperties ~= nil then
@@ -2373,6 +2392,25 @@ function GameHud.CreateRollDialog(self)
             m_multitargets[index].rollProperties.multitargets = nil
             m_multitargets[index].boons = (rollInfo.boons or 0)
             m_multitargets[index].banes = (rollInfo.banes or 0)
+
+            -- Check roll requirements for triggers so they hide/show dynamically.
+            -- If a trigger is already activated, skip the check -- its own effect
+            -- may change the roll state (e.g. turning a bane into an edge) which
+            -- would otherwise invalidate the requirement it already satisfied.
+            local enabledMods = GetEnabledModifiers()
+            for _, trigger in ipairs(m_multitargets[index].triggers) do
+                local powerMod = trigger.modifier.powerRollModifier
+                if powerMod ~= nil and powerMod:try_get("rollRequirement", "none") ~= "none" then
+                    if trigger.triggered then
+                        trigger.failsRequirement = nil
+                    else
+                        local passes = powerMod:CheckRollRequirement(rollInfo, enabledMods, rollProperties)
+                        trigger.failsRequirement = not passes
+                    end
+                else
+                    trigger.failsRequirement = nil
+                end
+            end
         end
 
         --make sure the rollProperties have the correct multitargets.
@@ -2404,6 +2442,7 @@ function GameHud.CreateRollDialog(self)
 
         if needReroll then
             rollAgainButton:FireEvent("press")
+            return true
         end
     end
 
@@ -2801,33 +2840,54 @@ function GameHud.CreateRollDialog(self)
                         showingDialog = false
                     end
 
-                    print("AI:: SETTING UP EVENT", creature ~= nil and creature._tmp_aicontrol or 0)
+                    print("AI:: Dialog SETTING UP EVENT", creature ~= nil and creature._tmp_aicontrol or 0)
                     if creature ~= nil and creature._tmp_aicontrol > 0 then
                         local TryToProceed
                         local m_timerState = nil
 
-                        TryToProceed = function()
-                            if resultPanel.valid and showingDialog then
 
+                        TryToProceed = function()
+                            --print("AI:: Dialog TRY TO PROCEED", resultPanel.valid and showingDialog)
+                            if resultPanel.valid and showingDialog then
                                 local tokens = dmhub.allTokens
                                 local haveTriggers = false
 
-                                for _,tok in ipairs(tokens) do
-                                    if tok.playerControlled then
-                                        local triggers = tok.properties:GetAvailableTriggers(true)
-                                        for _,trigger in pairs(triggers or {}) do
-                                            if trigger.powerRollModifier then
-                                                haveTriggers = true
-                                                break
+                                local q = dmhub.initiativeQueue
+                                if q ~= nil then
+                                    for _,tok in ipairs(tokens) do
+                                        local initiativeid = InitiativeQueue.GetInitiativeId(tok)
+                                        if q:IsEntryPlayer(initiativeid) or tok.playerControlled then
+                                            local triggers = tok.properties:GetAvailableTriggers(true)
+                                            for _,trigger in pairs(triggers or {}) do
+                                                if trigger.powerRollModifier then
+                                                    haveTriggers = true
+                                                    break
+                                                end
                                             end
                                         end
                                     end
                                 end
 
+                                --check to make sure we don't need to reroll.
+                                if not haveTriggers then
+                                    triggersContainer:FireEvent("charactersUpdated")
+                                    CalculateRollText()
+                                    local rerolling = RecalculateMultiTargets()
+                                    if rerolling then
+                                        --we need to reroll.
+                                        dmhub.Schedule(3.0, function()
+                                            TryToProceed()
+                                        end)
+                                        return
+                                    end
+                                end
+
+                                --print("AI:: Dialog haveTriggers =", haveTriggers, m_timerState)
+
                                 if haveTriggers and (m_timerState == nil or (dmhub.Time() < m_timerState.expire) or m_timerState.paused) then
                                     local t = dmhub.Time()
                                     if m_timerState == nil then
-                                        print("AI:: SET TIMER STATE")
+                                        --print("AI:: Dialog SET TIMER STATE")
                                         m_timerState = {
                                             start = t,
                                             current = t,
@@ -2906,7 +2966,7 @@ function GameHud.CreateRollDialog(self)
                 local beginRollFn = beginRoll
                 local completeRollFn = completeRoll
                 local creatureUsed = creature
-                local modifiersUsed = dmhub.DeepCopy(m_activeModifiers)
+                local modifiersUsed = DeepCopy(m_activeModifiers)
                 local multitargetsUsed = m_multitargets
 
                 local tokenid = nil
@@ -3148,22 +3208,22 @@ function GameHud.CreateRollDialog(self)
                         print("ROLL:: COMPLETE")
                         m_rollInfo = rollInfo
 
-                            print("AI:: IS COMPLETE, SHOWING DIALOG:", showingDialog)
+                            print("AI:: Dialog IS COMPLETE, SHOWING DIALOG:", showingDialog)
                         if showingDialog then
                             resultPanel:SetClassTree("rolling", false)
                             resultPanel:SetClassTree("finishedRolling", true)
 
                             proceedAfterRollButton.events.press = function()
-                                print("AI:: PRESSED PROCEED AFTER ROLL")
+                                print("AI:: Dialog PRESSED PROCEED AFTER ROLL")
                                 resultPanel:SetClass('hidden', true)
                                 RelinquishPanel()
 
                                 completeFunction(rollInfo)
                             end
 
-                            print("AI:: ROLL COMPLETE...")
+                            print("AI:: Dialog ROLL COMPLETE...")
                             if creature ~= nil and creature._tmp_aicontrol > 0 then
-                            print("AI:: ROLL PRESS PROCEED...")
+                            print("AI:: Dialog ROLL PRESS PROCEED...")
                                 proceedAfterRollButton:FireEvent("press")
                             end
 
@@ -3184,8 +3244,8 @@ function GameHud.CreateRollDialog(self)
 
                 -- Hook for external mods to intercept rolls
                 local hookResult = nil
-                if RollDialog_BeforeRoll then
-                    hookResult = RollDialog_BeforeRoll({
+                if RollDialog.OnBeforeRoll then
+                    hookResult = RollDialog.OnBeforeRoll({
                         rollArgs = rollArgs,
                         roll = rollArgs.roll,
                         description = rollArgs.description,

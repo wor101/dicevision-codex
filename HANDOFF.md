@@ -11,16 +11,16 @@ This document provides a complete picture of how the DiceVision mod integrates p
 ```
 User clicks "Roll Dice" in Codex
          ↓
-DSRollDialog.lua constructs rollArgs (line 3144-3199)
+DSRollDialog.lua constructs rollArgs (line ~3200)
          ↓
-Calls RollDialog_BeforeRoll hook (line 3207-3223)
+Calls RollDialog.OnBeforeRoll callback (line 3247-3263)
          ↓
 DiceVision (if mode="replace" & connected):
   - Stores rollArgs, edges/banes, multitargets
   - Returns "intercept"
   - Shows "Waiting for physical dice..."
          ↓
-DSRollDialog sees "intercept", skips dmhub.Roll (line 3227-3228)
+DSRollDialog sees "intercept", skips dmhub.Roll (line 3266-3268)
          ↓
 User rolls physical dice
          ↓
@@ -36,17 +36,19 @@ C# engine processes roll with correct tier/damage
 
 ---
 
-## Files Modified
+## Official Codex Hook: RollDialog.OnBeforeRoll
 
-### 1. `Draw_Steel_UI_bd58/DSRollDialog.lua`
+### DSRollDialog.lua (Official, Unmodified)
 
-**Hook Addition (Lines 3203-3229)**
+The `RollDialog.OnBeforeRoll` callback is built into the official Codex codebase (`Draw_Steel_UI_bd58/DSRollDialog.lua`). DiceVision no longer needs to modify this file.
+
+**How it works (Lines 3247-3268):**
 
 ```lua
--- Hook for external mods to intercept rolls (e.g., DiceVision physical dice)
+-- Hook for external mods to intercept rolls
 local hookResult = nil
-if RollDialog_BeforeRoll then
-    hookResult = RollDialog_BeforeRoll({
+if RollDialog.OnBeforeRoll then
+    hookResult = RollDialog.OnBeforeRoll({
         rollArgs = rollArgs,
         roll = rollArgs.roll,
         description = rollArgs.description,
@@ -60,31 +62,22 @@ if RollDialog_BeforeRoll then
         guid = rollArgs.guid,
         modifiers = modifiersUsed,
         multitargets = multitargetsUsed,
-        boons = m_boons,  -- Edge/Bane state for DiceVision
+        boons = m_boons,
     })
 end
 
--- If hook returns "intercept", the mod will handle calling dmhub.Roll
 if hookResult == "intercept" then
     return
 end
 ```
 
-**m_boons State Management**
-
-| Line | Operation | Context |
-|------|-----------|---------|
-| 480 | Declaration | `local m_boons = 0` |
-| 531 | Applied to roll | `roll = GameSystem.ApplyBoons(roll, m_boons)` |
-| 1611 | Updated by click | User clicks boon/bane label |
-| 1614 | Sync to multitarget | Updates `multitargets[i].boonsOverride` |
-| 1649 | Reset on prepare | `m_boons = 0` in boonBar.prepare |
-| 1653 | Load from multitarget | If multitarget active |
-| 3222 | Passed to hook | `boons = m_boons` |
+The `RollDialog` table is declared at line 10 of DSRollDialog.lua with `OnBeforeRoll = false`. DiceVision assigns its callback function to `RollDialog.OnBeforeRoll` at connect time.
 
 ---
 
-### 2. `DiceVision_5554/DiceVision.lua`
+## DiceVision Mod Files
+
+### `DiceVision_5554/DiceVision.lua`
 
 **Core Components:**
 
@@ -114,7 +107,7 @@ local DiceVision = {
 | `ParseBoonsFromRollString(str)` | Fallback: extract from "2d10 1 edge" | `(edges, banes)` |
 | `extractModifierFromRoll(str)` | Get modifier from "2d10+5" | `5` |
 
-#### RollDialog_BeforeRoll Hook (Lines 814-862)
+#### onBeforeRoll Callback (registered on RollDialog.OnBeforeRoll)
 
 **Stores pending roll context:**
 ```lua
@@ -126,6 +119,19 @@ DiceVision.pendingRoll = {
     banes = banes,
     multitargets = context.multitargets
 }
+```
+
+**Registration pattern (load order safe):**
+```lua
+-- At load time (guarded — RollDialog may not exist yet)
+if RollDialog then
+    RollDialog.OnBeforeRoll = onBeforeRoll
+end
+
+-- At connect time (guaranteed — all mods loaded by then)
+if RollDialog then
+    RollDialog.OnBeforeRoll = onBeforeRoll
+end
 ```
 
 **Fallback for boons reset issue:** If `context.boons == 0` but roll string contains "1 edge" or "2 bane", parses from string (handles boonBar.prepare reset).
@@ -300,35 +306,27 @@ When `clampOutOfRange` is enabled:
 
 ---
 
-## DSRollDialog Hook (Optional Dependency)
+## RollDialog.OnBeforeRoll Integration
 
-The `RollDialog_BeforeRoll` hook in DSRollDialog.lua is OPTIONAL:
+The `RollDialog.OnBeforeRoll` callback is part of the official Codex codebase. No core file modifications are needed.
 
-- **If DiceVision is loaded but hook is missing**: DiceVision won't intercept rolls, but chat/off modes still work
-- **If hook exists but DiceVision is missing**: Hook check fails gracefully, rolls proceed normally
-- **Both present**: Full DiceVision functionality in replace mode
+- **If DiceVision is loaded**: It registers `onBeforeRoll` on `RollDialog.OnBeforeRoll` at connect time
+- **If DiceVision is not loaded**: `RollDialog.OnBeforeRoll` remains `false`, rolls proceed normally
+- **On disconnect**: DiceVision sets `RollDialog.OnBeforeRoll = false` to restore normal behavior
 
-This design allows DiceVision to work on machines with the modified DSRollDialog.lua while failing gracefully on machines with the stock version.
-
-**Important**: DSRollDialog.lua modifications are LOCAL ONLY - they do NOT propagate to other players! For DiceVision roll replacement to work on another player's machine, they would need all three local requirements listed below.
+**Load order handling**: DiceVision attempts registration both at load time (guarded check for `RollDialog` existence) and at connect time (by then all mods are guaranteed to be loaded).
 
 ---
 
-## Local Installation Requirements (Replace Mode)
+## Installation Requirements
 
-For DiceVision's replace mode to function, three things must be in place on the user's local machine:
+DiceVision's replace mode requires only the DiceVision mod files installed in Codex's mods directory:
 
 | # | Requirement | Details |
 |---|-------------|---------|
 | 1 | **DiceVision mod files** | `DiceVision_5554/` folder with `DiceVision.lua`, `DVDicePanel.lua`, and `Main.lua` in the Codex mods directory |
-| 2 | **DSRollDialog.lua hook** | The `RollDialog_BeforeRoll` hook added to `Draw_Steel_UI_bd58/DSRollDialog.lua` (lines 3203-3227), placed immediately before the `dmhub.Roll(rollArgs)` call |
-| 3 | **Draw_Steel_UI checkout flag** | `Draw_Steel_UI_bd58/status.json` must have `"checkedout": true` so Codex loads the locally modified DSRollDialog.lua instead of the server version |
 
-**Why the checkout flag matters**: Codex uses `status.json` in each mod folder to determine whether to load local files or the server version. After a fresh install, `"checkedout"` defaults to `false`, which means Codex ignores local file modifications to DSRollDialog.lua -- even if the file on disk contains the hook. Setting `"checkedout": true` tells Codex to use the local copy.
-
-**Location of status.json** (Windows): `C:\Users\<username>\AppData\LocalLow\MCDM\Codex\mods\Draw_Steel_UI_bd58\status.json`
-
-**Note**: Chat and off modes do NOT require requirements 2 or 3 -- only replace mode needs the hook and checkout flag.
+No core Codex file modifications are needed. The `RollDialog.OnBeforeRoll` callback is built into the official DSRollDialog.lua.
 
 ---
 
@@ -337,27 +335,14 @@ For DiceVision's replace mode to function, three things must be in place on the 
 1. Action Log shows total rather than individual dice values (visual panel compensates)
 2. Requires active DiceVision API connection
 3. Only works with Draw Steel roll dialogs (DSRollDialog.lua)
-4. Roll replacement mode requires modified DSRollDialog.lua (local install only)
 
 ---
 
-## Why DiceVision Requires DSRollDialog.lua Modification
+## History: How the Hook Was Added to Codex
 
-We explored making DiceVision fully self-contained (no modifications to Codex core files). This is **not possible** due to engine limitations:
+DiceVision originally required a local modification to DSRollDialog.lua because no pre-roll hook existed. We explored several alternatives (wrapping `dmhub.Roll()`, file shadowing, global events, UI events) but none worked due to engine limitations.
 
-| Approach Attempted | Why It Failed |
-|-------------------|---------------|
-| Wrap `dmhub.Roll()` | Read-only engine property - Lua cannot reassign. Attempting to set causes: `Could not set property` error at load time. |
-| File shadowing | Mod IDs make require paths unique (`Draw_Steel_UI_bd58.DSRollDialog`) - cannot override core files. |
-| Global event system | No roll-specific events exist in Codex that fire before `dmhub.Roll()` is called. |
-| UI events (`prepareBeforeRollProperties`) | Fire too late in the flow - roll has already been initiated by the time they trigger. |
-
-**Conclusion**: The only working approach is the explicit `RollDialog_BeforeRoll` hook in DSRollDialog.lua. This hook must:
-1. Be placed immediately before the `dmhub.Roll(rollArgs)` call
-2. Check for the global `RollDialog_BeforeRoll` function
-3. Return early (skip `dmhub.Roll`) if the hook returns `"intercept"`
-
-This is an accepted limitation. Future Codex updates to DSRollDialog.lua may require re-applying the hook.
+We submitted a PR to the Codex team proposing a `RollDialog_BeforeRoll` global function pattern. They accepted the concept but implemented it as `RollDialog.OnBeforeRoll` — a callback field on the `RollDialog` table declared at the top of DSRollDialog.lua. This is now part of the official codebase, so DiceVision no longer requires any core file modifications.
 
 ---
 

@@ -8,12 +8,12 @@ This repository contains a mod that integrates physical dice recognition (DiceVi
 | File | Purpose |
 |------|---------|
 | `Codex/mods/DiceVision_5554/DiceVision.lua` | Main mod - API polling, roll interception, chat display |
-| `Codex/mods/Draw_Steel_UI_bd58/DSRollDialog.lua` | Codex's roll dialog - we added a hook at line 3207 |
+| `Codex/mods/Draw_Steel_UI_bd58/DSRollDialog.lua` | Codex's roll dialog - has official `RollDialog.OnBeforeRoll` hook (line 3247) |
 | `HANDOFF.md` | **Detailed technical documentation** - read this for implementation details |
 
 ## Architecture (High-Level)
 1. User clicks "Roll Dice" in Codex
-2. `RollDialog_BeforeRoll` hook intercepts (if DiceVision connected in replace mode)
+2. `RollDialog.OnBeforeRoll` callback intercepts (if DiceVision connected in replace mode)
 3. DiceVision waits for physical dice from API
 4. `handlePendingRoll()` processes result and calls `dmhub.Roll()` with deterministic total
 

@@ -542,7 +542,7 @@ end
 -- Forward Declarations
 -- ============================================================================
 
-local startPolling          -- Used by RollDialog_BeforeRoll
+local startPolling          -- Used by onBeforeRoll
 local stopPolling
 local removeRollInterceptor
 local checkRollTimeout      -- Used by longPollForRolls
@@ -908,6 +908,9 @@ removeRollInterceptor = function()
     DiceVision.pendingRoll = nil
     DiceVision.waitingForRoll = false
     DiceVision.currentRequestId = nil
+    if RollDialog then
+        RollDialog.OnBeforeRoll = false
+    end
 end
 
 -- ============================================================================
@@ -956,6 +959,10 @@ Commands.dv = function(args)
         validateSession(function(success, result)
             if success then
                 DiceVision.mode = "replace"
+                -- Ensure callback is registered (handles load order)
+                if RollDialog then
+                    RollDialog.OnBeforeRoll = onBeforeRoll
+                end
                 chat.Send("[DiceVision] Connected! Ready to capture dice rolls.")
             else
                 chat.Send("[DiceVision] Connection failed: " .. tostring(result))
@@ -1156,10 +1163,10 @@ end
 Commands.dicevision = Commands.dv
 
 -- ============================================================================
--- RollDialog Hook (called from DSRollDialog.lua before dmhub.Roll)
+-- RollDialog.OnBeforeRoll Callback (official Codex hook API)
 -- ============================================================================
 
-RollDialog_BeforeRoll = function(context)
+local function onBeforeRoll(context)
     if not context then return nil end
     if not DiceVision then return nil end
 
@@ -1198,6 +1205,11 @@ RollDialog_BeforeRoll = function(context)
     chat.Send("[DiceVision] Waiting for physical dice...")
 
     return "intercept"
+end
+
+-- Register callback (guarded for load order)
+if RollDialog then
+    RollDialog.OnBeforeRoll = onBeforeRoll
 end
 
 print("DV: DiceVision script loaded")
