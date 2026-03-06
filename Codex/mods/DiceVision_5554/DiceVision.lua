@@ -87,227 +87,6 @@ local function formatRollForChat(rollData)
     return string.format("[DiceVision] %s = %d", diceStr, rollData.total)
 end
 
-local function extractModifierFromRoll(rollStr)
-    if not rollStr then return 0 end
-    local strippedStr = rollStr:gsub("%s+%d+%s+edges?%s*$", "")
-    strippedStr = strippedStr:gsub("%s+%d+%s+banes?%s*$", "")
-    local sign, num = strippedStr:match("([%+%-])%s*(%d+)%s*$")
-    if sign and num then
-        local modifier = tonumber(num) or 0
-        if sign == "-" then
-            modifier = -modifier
-        end
-        return modifier
-    end
-    return 0
-end
-
-local function getDiceFaces(dieType)
-    local faces = dieType:match("d(%d+)")
-    return tonumber(faces) or 10
-end
-
-local function calculateTier(total)
-    if total >= 17 then
-        return 3
-    elseif total >= 12 then
-        return 2
-    else
-        return 1
-    end
-end
-
-local function SplitBoons(combinedBoons)
-    combinedBoons = combinedBoons or 0
-    if combinedBoons >= 0 then
-        return combinedBoons, 0
-    else
-        return 0, -combinedBoons
-    end
-end
-
-local function GetRollModFromEdgesAndBanes(edges, banes)
-    edges = edges or 0
-    banes = banes or 0
-    local bonus = 0
-    if banes == 0 then
-        if edges == 1 then
-            bonus = 2
-        end
-    elseif edges == 0 then
-        if banes == 1 then
-            bonus = -2
-        end
-    elseif edges > banes then
-        bonus = 2
-    elseif edges < banes then
-        bonus = -2
-    else
-        bonus = 0
-    end
-    return bonus
-end
-
-local function CalculateTierWithEdges(total, edges, banes)
-    local tier = 1
-    if total >= 17 then
-        tier = 3
-    elseif total >= 12 then
-        tier = 2
-    end
-    if edges >= 2 and banes == 0 then
-        tier = tier + 1
-    elseif banes >= 2 and edges == 0 then
-        tier = tier - 1
-    end
-    if tier > 3 then tier = 3 end
-    if tier < 1 then tier = 1 end
-    return tier
-end
-
-local function ParseBoonsFromRollString(rollString)
-    if not rollString then return 0, 0 end
-    local edges = 0
-    local banes = 0
-    local edgeMatch = string.match(rollString, "(%d+)%s+edge")
-    if edgeMatch then
-        edges = tonumber(edgeMatch) or 0
-    end
-    local baneMatch = string.match(rollString, "(%d+)%s+bane")
-    if baneMatch then
-        banes = tonumber(baneMatch) or 0
-    end
-    return edges, banes
-end
-
-local function getTierRanges()
-    return {
-        { tier = 1, label = "1-11", min = nil, max = 11 },
-        { tier = 2, label = "12-16", min = 12, max = 16 },
-        { tier = 3, label = "17+", min = 17, max = nil },
-    }
-end
-
--- ============================================================================
--- Dice Rule Processing
--- ============================================================================
-
-local function applyValueMappings(dice, mappings)
-    if not mappings or next(mappings) == nil then
-        return dice
-    end
-    local result = {}
-    for i, die in ipairs(dice) do
-        local dieType = die.type
-        local typeMapping = mappings[dieType] or mappings["*"] or {}
-        local newValue = typeMapping[die.value] or die.value
-        result[i] = {
-            type = die.type,
-            value = newValue,
-            originalValue = (newValue ~= die.value) and die.value or nil,
-        }
-    end
-    return result
-end
-
-local function clampOutOfRangeValues(dice, isEnabled)
-    if not isEnabled then
-        return dice
-    end
-    local result = {}
-    for i, die in ipairs(dice) do
-        local value = die.value
-        local clamped = value
-        if value < 0 or value > 10 then
-            clamped = 1
-            print(string.format("[DiceVision] Clamped %s value %d -> 1 (out of 0-10 range)", die.type, value))
-        end
-        result[i] = {
-            type = die.type,
-            value = clamped,
-            originalValue = (clamped ~= value) and value or die.originalValue,
-        }
-    end
-    return result
-end
-
-local function applyDiceSelection(dice, selection)
-    if not selection or not selection.count then
-        return dice
-    end
-    local sorted = {}
-    for i, die in ipairs(dice) do
-        sorted[i] = {die = die, index = i}
-    end
-    if selection.keep == "highest" then
-        table.sort(sorted, function(a, b) return a.die.value > b.die.value end)
-    elseif selection.keep == "lowest" then
-        table.sort(sorted, function(a, b) return a.die.value < b.die.value end)
-    end
-    local result = {}
-    local count = math.min(selection.count, #sorted)
-    for i = 1, count do
-        result[i] = sorted[i].die
-    end
-    return result, sorted
-end
-
-local function detectDiceSelection(pendingRoll)
-    if not pendingRoll or not pendingRoll.originalRoll then
-        return nil
-    end
-    local creature = pendingRoll.rollArgs and pendingRoll.rollArgs.creature
-    local rollInfo = dmhub.ParseRoll(pendingRoll.originalRoll, creature)
-    if rollInfo and rollInfo.categories then
-        for catName, category in pairs(rollInfo.categories) do
-            if category.groups then
-                for _, group in ipairs(category.groups) do
-                    if group.numKeep and group.numKeep > 0 and group.numDice and group.numDice > group.numKeep then
-                        return {
-                            keep = "highest",
-                            count = group.numKeep,
-                            total = group.numDice,
-                        }
-                    end
-                end
-            end
-        end
-    end
-    return nil
-end
-
-local function getEffectiveRules(pendingRoll)
-    local rules = {
-        valueMappings = DiceVision.rules.valueMappings or {},
-        diceSelection = DiceVision.rules.diceSelection,
-    }
-    if not rules.diceSelection then
-        rules.diceSelection = detectDiceSelection(pendingRoll)
-    end
-    return rules
-end
-
-local function applyDiceRules(dice, pendingRoll)
-    local rules = getEffectiveRules(pendingRoll)
-    local processed = dice
-    local droppedDice = nil
-    processed = clampOutOfRangeValues(processed, DiceVision.rules.clampOutOfRange)
-    processed = applyValueMappings(processed, rules.valueMappings)
-    if rules.diceSelection then
-        local sorted
-        processed, sorted = applyDiceSelection(processed, rules.diceSelection)
-        if sorted and #sorted > #processed then
-            droppedDice = {}
-            for i = #processed + 1, #sorted do
-                droppedDice[#droppedDice + 1] = sorted[i].die
-            end
-        end
-        print(string.format("[DiceVision] Dice selection: keep %s %d of %d",
-            rules.diceSelection.keep, rules.diceSelection.count, #dice))
-    end
-    return processed, droppedDice
-end
-
 -- ============================================================================
 -- Custom Chat Message for Physical Dice Rolls
 -- ============================================================================
@@ -588,6 +367,9 @@ local function handleSessionExpired()
 end
 
 local function handleDiceVisionRoll(rollData)
+    print(string.format("DV: handleDiceVisionRoll - panelWaiting=%s, mode=%s, waitingForRoll=%s, dice=%s",
+        tostring(DiceVision.panelWaitingForRoll), DiceVision.mode, tostring(DiceVision.waitingForRoll),
+        formatDice(rollData.dice)))
     -- Handle panel-initiated roll first
     if DiceVision.panelWaitingForRoll then
         postRollToChat(rollData)
@@ -698,11 +480,11 @@ end
 -- ============================================================================
 
 postRollToChat = function(rollData)
-    local processedDice, droppedDice = applyDiceRules(rollData.dice, nil)
+    local processedDice, droppedDice = DiceRollLogic.applyDiceRules(rollData.dice, nil)
     local diceForMessage = {}
     local diceSum = 0
     for _, die in ipairs(processedDice) do
-        local faces = getDiceFaces(die.type)
+        local faces = DiceRollLogic.getDiceFaces(die.type)
         diceForMessage[#diceForMessage + 1] = {
             faces = faces,
             value = die.value,
@@ -718,7 +500,7 @@ postRollToChat = function(rollData)
         print("[DiceVision] Dropped dice: " .. table.concat(droppedValues, ", "))
     end
     local total = diceSum
-    local tier = calculateTier(total)
+    local tier = DiceRollLogic.calculateTier(total)
     local message = DiceVisionRollMessage.new{
         description = "Physical Dice Roll",
         dice = diceForMessage,
@@ -730,7 +512,7 @@ postRollToChat = function(rollData)
     }
     chat.SendCustom(message)
     DiceVision.panelTokenId = nil  -- Clear after use
-    print(string.format("DBG: DiceVision roll posted to chat: total=%d, tier=%d", total, tier))
+    print(string.format("DV: postRollToChat - total=%d, tier=%d", total, tier))
 end
 
 -- ============================================================================
@@ -746,9 +528,12 @@ hideWaitingDialog = function()
 end
 
 local function postDiceVisionRollToChat(rollData, rollInfo, pendingRoll)
+    local modifier = DiceRollLogic.extractModifierFromRoll(pendingRoll.roll)
+    print(string.format("DV: postDiceVisionRollToChat - modifier=%d, total=%d, tier=%s",
+        modifier, rollInfo.total, tostring(rollInfo.tiers)))
     local diceForMessage = {}
     for _, die in ipairs(rollData.dice) do
-        local faces = getDiceFaces(die.type)
+        local faces = DiceRollLogic.getDiceFaces(die.type)
         diceForMessage[#diceForMessage + 1] = {
             faces = faces,
             value = die.value
@@ -758,7 +543,6 @@ local function postDiceVisionRollToChat(rollData, rollInfo, pendingRoll)
     if not tokenid and pendingRoll.creature then
         tokenid = dmhub.LookupTokenId(pendingRoll.creature)
     end
-    local modifier = extractModifierFromRoll(pendingRoll.roll)
     local message = DiceVisionRollMessage.new{
         description = pendingRoll.description or "Roll",
         dice = diceForMessage,
@@ -785,12 +569,14 @@ handlePendingRoll = function(rollData)
         stopPolling()
     end
 
-    local modifier = extractModifierFromRoll(pendingRoll.originalRoll)
+    local modifier = DiceRollLogic.extractModifierFromRoll(pendingRoll.originalRoll)
+    print(string.format("DV: handlePendingRoll - originalRoll='%s', modifier=%d",
+        tostring(pendingRoll.originalRoll), modifier))
     local diceSum = 0
-    local processedDice, droppedDice = applyDiceRules(rollData.dice, pendingRoll)
+    local processedDice, droppedDice = DiceRollLogic.applyDiceRules(rollData.dice, pendingRoll)
     local diceForMessage = {}
     for i, die in ipairs(processedDice) do
-        local faces = getDiceFaces(die.type)
+        local faces = DiceRollLogic.getDiceFaces(die.type)
         diceSum = diceSum + die.value
         diceForMessage[i] = {
             faces = faces,
@@ -798,6 +584,8 @@ handlePendingRoll = function(rollData)
             originalValue = die.originalValue,
         }
     end
+    print(string.format("DV: handlePendingRoll - diceSum=%d, processedDice=%d, droppedDice=%d",
+        diceSum, #processedDice, droppedDice and #droppedDice or 0))
     if droppedDice and #droppedDice > 0 then
         local droppedValues = {}
         for _, die in ipairs(droppedDice) do
@@ -808,11 +596,14 @@ handlePendingRoll = function(rollData)
 
     local edges = pendingRoll.edges or 0
     local banes = pendingRoll.banes or 0
-    local edgeBaneMod = GetRollModFromEdgesAndBanes(edges, banes)
+    local edgeBaneMod = DiceRollLogic.GetRollModFromEdgesAndBanes(edges, banes)
     local isNonTargeted = not pendingRoll.multitargets or #pendingRoll.multitargets == 0
     local baseTotal = diceSum + modifier
     local finalTotal = baseTotal + edgeBaneMod
-    local tier = calculateTier(finalTotal)
+    local tier = DiceRollLogic.CalculateTierWithEdges(finalTotal, edges, banes)
+
+    print(string.format("DV: handlePendingRoll - edges=%d, banes=%d, net=%d, edgeBaneMod=%d, baseTotal=%d, finalTotal=%d, tier=%d",
+        edges, banes, edges - banes, edgeBaneMod, baseTotal, finalTotal, tier))
 
     local rollArgs = pendingRoll.rollArgs
     if not rollArgs then
@@ -836,6 +627,9 @@ handlePendingRoll = function(rollData)
     }
     rollArgs.instant = true
 
+    print(string.format("DV: handlePendingRoll - isNonTargeted=%s, rollArgs.roll='%s'",
+        tostring(isNonTargeted), tostring(rollArgs.roll)))
+
     if isNonTargeted then
         local boonsValue = edges - banes
         print("[DiceVision] Non-targeted roll detected. baseTotal:", baseTotal, "boonsValue:", boonsValue)
@@ -848,9 +642,18 @@ handlePendingRoll = function(rollData)
             rollArgs.roll = tostring(finalTotal)
         end
     else
+        local net = edges - banes
         rollArgs.roll = tostring(baseTotal)
-        rollArgs.boons = edges
-        rollArgs.banes = banes
+        if net > 0 then
+            rollArgs.boons = net
+            rollArgs.banes = 0
+        elseif net < 0 then
+            rollArgs.boons = 0
+            rollArgs.banes = -net
+        else
+            rollArgs.boons = 0
+            rollArgs.banes = 0
+        end
         rollArgs.properties = rollArgs.properties or {}
         rollArgs.properties.multitargets = pendingRoll.multitargets
         rollArgs.properties.multitargets[1].boons = 0
@@ -859,8 +662,9 @@ handlePendingRoll = function(rollData)
 
     local originalComplete = rollArgs.complete
     rollArgs.complete = function(rollInfo)
-        if (edges >= 2 and banes == 0) or (banes >= 2 and edges == 0) then
-            local calculatedTier = CalculateTierWithEdges(finalTotal, edges, banes)
+        local net = edges - banes
+        if net >= 2 or net <= -2 then
+            local calculatedTier = DiceRollLogic.CalculateTierWithEdges(finalTotal, edges, banes)
             local props = rollInfo.properties or {}
             if not props:try_get("overrideTier") then
                 props.overrideTier = calculatedTier
@@ -1179,11 +983,17 @@ onBeforeRoll = function(context)
         return nil
     end
 
-    local edges, banes = SplitBoons(context.boons)
+    print(string.format("DV: onBeforeRoll - roll='%s', boons=%s, description='%s'",
+        tostring(context.roll), tostring(context.boons), tostring(context.description)))
 
-    if edges == 0 and banes == 0 and context.roll then
-        edges, banes = ParseBoonsFromRollString(context.roll)
+    local edges, banes = DiceRollLogic.ParseBoonsFromRollString(context.roll)
+
+    if edges == 0 and banes == 0 then
+        edges, banes = DiceRollLogic.SplitBoons(context.boons)
     end
+
+    print(string.format("DV: onBeforeRoll - parsed edges=%d, banes=%d, multitargets=%s",
+        edges, banes, tostring(context.multitargets and #context.multitargets or 0)))
 
     DiceVision.pendingRoll = {
         rollArgs = context.rollArgs,

@@ -77,6 +77,29 @@ The `RollDialog` table is declared at line 10 of DSRollDialog.lua with `OnBefore
 
 ## DiceVision Mod Files
 
+### `DiceVision_5554/DiceRollLogic.lua`
+
+Pure roll utility and dice rule processing functions, extracted from DiceVision.lua for maintainability. All functions live on the global `DiceRollLogic` table; DiceVision.lua calls them directly as `DiceRollLogic.func()` at runtime (no load-order dependency).
+
+**Functions:**
+
+| Function | Purpose |
+|----------|---------|
+| `extractModifierFromRoll(str)` | Get modifier from "2d10+5" |
+| `getDiceFaces(dieType)` | Get face count from "d10" |
+| `calculateTier(total)` | Raw tier from total (1-11=T1, 12-16=T2, 17+=T3) |
+| `SplitBoons(combined)` | Convert combined boons value to (edges, banes) |
+| `GetRollModFromEdgesAndBanes(e, b)` | Net-based ±2 modifier (net ±1 only) |
+| `CalculateTierWithEdges(total, e, b)` | Tier with net-based tier shift (net ±2+) |
+| `ParseBoonsFromRollString(str)` | Fallback: extract from "2d10 1 edge" |
+| `getTierRanges()` | Tier threshold definitions |
+| `applyValueMappings(dice, mappings)` | Apply value remapping (e.g., 0→10) |
+| `clampOutOfRangeValues(dice, isEnabled)` | Clamp values outside 0-10 to 1 |
+| `applyDiceSelection(dice, selection)` | Keep highest/lowest N dice |
+| `detectDiceSelection(pendingRoll)` | Auto-detect numKeep from roll context |
+| `getEffectiveRules(pendingRoll)` | Merge manual rules with auto-detection |
+| `applyDiceRules(dice, pendingRoll)` | Main entry point - applies all rules |
+
 ### `DiceVision_5554/DiceVision.lua`
 
 **Core Components:**
@@ -97,13 +120,13 @@ local DiceVision = {
 }
 ```
 
-#### Edge/Bane Utility Functions
+#### Edge/Bane Utility Functions (in DiceRollLogic.lua)
 
 | Function | Purpose | Returns |
 |----------|---------|---------|
-| `SplitBoons(combined)` | Convert -2..+2 to separate counts | `(edges, banes)` |
-| `GetRollModFromEdgesAndBanes(e, b)` | Calculate ±2 modifier (NOT tier shift) | `0`, `+2`, or `-2` |
-| `CalculateTierWithEdges(total, e, b)` | Calculate tier with double edge/bane shifts | `1`, `2`, or `3` |
+| `SplitBoons(combined)` | Convert combined boons value to separate counts | `(edges, banes)` |
+| `GetRollModFromEdgesAndBanes(e, b)` | Net-based ±2 modifier (net ±1 only; net ±2+ returns 0) | `0`, `+2`, or `-2` |
+| `CalculateTierWithEdges(total, e, b)` | Tier with net-based tier shift (net ±2+) | `1`, `2`, or `3` |
 | `ParseBoonsFromRollString(str)` | Fallback: extract from "2d10 1 edge" | `(edges, banes)` |
 | `extractModifierFromRoll(str)` | Get modifier from "2d10+5" | `5` |
 
@@ -151,20 +174,30 @@ rollArgs.roll = rollWithBoons  -- e.g., "35 1 edge"
 
 **Targeted Rolls (has multitargets):**
 ```lua
--- Pass baseTotal, let Codex apply edge/bane modifier
+-- Convert raw edges/banes to net values so the engine handles them correctly
+local net = edges - banes
 rollArgs.roll = tostring(baseTotal)
-rollArgs.boons = edges
-rollArgs.banes = banes
+if net > 0 then
+    rollArgs.boons = net
+    rollArgs.banes = 0
+elseif net < 0 then
+    rollArgs.boons = 0
+    rollArgs.banes = -net
+else
+    rollArgs.boons = 0
+    rollArgs.banes = 0
+end
 -- Zero out multitargets to prevent double-counting
 rollArgs.properties.multitargets[1].boons = 0
 rollArgs.properties.multitargets[1].banes = 0
 ```
 
-**Double Edge/Bane Tier Shift Override:**
+**Net Edge/Bane Tier Shift Override:**
 ```lua
 -- Wrap complete callback to inject overrideTier
 rollArgs.complete = function(rollInfo)
-    if (edges >= 2 and banes == 0) or (banes >= 2 and edges == 0) then
+    local net = edges - banes
+    if net >= 2 or net <= -2 then
         local calculatedTier = CalculateTierWithEdges(finalTotal, edges, banes)
         props.overrideTier = calculatedTier
         rollInfo:UploadProperties(props)
@@ -195,15 +228,15 @@ Custom chat panel rendering physical dice with icons:
 
 ## Edge/Bane Rules (Draw Steel)
 
-| Situation | Effect |
-|-----------|--------|
-| 1 edge, 0 banes | +2 to roll |
-| 0 edges, 1 bane | -2 to roll |
-| 2+ edges, 0 banes | +1 tier shift |
-| 0 edges, 2+ banes | -1 tier shift |
-| edges > banes | +2 to roll |
-| banes > edges | -2 to roll |
-| edges == banes | No effect |
+Edges and banes cancel 1-for-1. Apply rules based on net (edges - banes):
+
+| Net | Effect |
+|-----|--------|
+| +1 | +2 modifier |
+| -1 | -2 modifier |
+| +2 or more | +1 tier shift (no modifier) |
+| -2 or less | -1 tier shift (no modifier) |
+| 0 | No effect (cancelled out) |
 
 **Tier Thresholds:**
 - Tier 1: 1-11
@@ -248,7 +281,7 @@ DiceVision.rules = {
 }
 ```
 
-### Rule Processing Functions (Lines 246-398)
+### Rule Processing Functions (in DiceRollLogic.lua)
 
 | Function | Purpose | Parameters |
 |----------|---------|------------|
@@ -324,7 +357,7 @@ DiceVision's replace mode requires only the DiceVision mod files installed in Co
 
 | # | Requirement | Details |
 |---|-------------|---------|
-| 1 | **DiceVision mod files** | `DiceVision_5554/` folder with `DiceVision.lua`, `DVDicePanel.lua`, and `Main.lua` in the Codex mods directory |
+| 1 | **DiceVision mod files** | `DiceVision_5554/` folder with `DiceVision.lua`, `DiceRollLogic.lua`, `DVDicePanel.lua`, and `Main.lua` in the Codex mods directory |
 
 No core Codex file modifications are needed. The `RollDialog.OnBeforeRoll` callback is built into the official DSRollDialog.lua. See the [official Codex repo](https://github.com/VerisimLLC/draw-steel-codex) for the source.
 
