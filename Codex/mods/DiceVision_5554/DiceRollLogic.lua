@@ -14,9 +14,7 @@ DiceRollLogic = {}
 
 function DiceRollLogic.extractModifierFromRoll(rollStr)
     if not rollStr then return 0 end
-    local strippedStr = rollStr:gsub("%s+%d+%s+edges?%s*$", "")
-    strippedStr = strippedStr:gsub("%s+%d+%s+banes?%s*$", "")
-    local sign, num = strippedStr:match("([%+%-])%s*(%d+)%s*$")
+    local sign, num = rollStr:match("([%+%-])%s*(%d+)")
     if sign and num then
         local modifier = tonumber(num) or 0
         if sign == "-" then
