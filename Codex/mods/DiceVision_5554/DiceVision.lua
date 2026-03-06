@@ -87,22 +87,6 @@ local function formatRollForChat(rollData)
     return string.format("[DiceVision] %s = %d", diceStr, rollData.total)
 end
 
--- Roll logic functions (defined in DiceRollLogic.lua, loaded first alphabetically)
-local extractModifierFromRoll = DiceRollLogic.extractModifierFromRoll
-local getDiceFaces = DiceRollLogic.getDiceFaces
-local calculateTier = DiceRollLogic.calculateTier
-local SplitBoons = DiceRollLogic.SplitBoons
-local GetRollModFromEdgesAndBanes = DiceRollLogic.GetRollModFromEdgesAndBanes
-local CalculateTierWithEdges = DiceRollLogic.CalculateTierWithEdges
-local ParseBoonsFromRollString = DiceRollLogic.ParseBoonsFromRollString
-local getTierRanges = DiceRollLogic.getTierRanges
-local applyValueMappings = DiceRollLogic.applyValueMappings
-local clampOutOfRangeValues = DiceRollLogic.clampOutOfRangeValues
-local applyDiceSelection = DiceRollLogic.applyDiceSelection
-local detectDiceSelection = DiceRollLogic.detectDiceSelection
-local getEffectiveRules = DiceRollLogic.getEffectiveRules
-local applyDiceRules = DiceRollLogic.applyDiceRules
-
 -- ============================================================================
 -- Custom Chat Message for Physical Dice Rolls
 -- ============================================================================
@@ -493,11 +477,11 @@ end
 -- ============================================================================
 
 postRollToChat = function(rollData)
-    local processedDice, droppedDice = applyDiceRules(rollData.dice, nil)
+    local processedDice, droppedDice = DiceRollLogic.applyDiceRules(rollData.dice, nil)
     local diceForMessage = {}
     local diceSum = 0
     for _, die in ipairs(processedDice) do
-        local faces = getDiceFaces(die.type)
+        local faces = DiceRollLogic.getDiceFaces(die.type)
         diceForMessage[#diceForMessage + 1] = {
             faces = faces,
             value = die.value,
@@ -513,7 +497,7 @@ postRollToChat = function(rollData)
         print("[DiceVision] Dropped dice: " .. table.concat(droppedValues, ", "))
     end
     local total = diceSum
-    local tier = calculateTier(total)
+    local tier = DiceRollLogic.calculateTier(total)
     local message = DiceVisionRollMessage.new{
         description = "Physical Dice Roll",
         dice = diceForMessage,
@@ -543,7 +527,7 @@ end
 local function postDiceVisionRollToChat(rollData, rollInfo, pendingRoll)
     local diceForMessage = {}
     for _, die in ipairs(rollData.dice) do
-        local faces = getDiceFaces(die.type)
+        local faces = DiceRollLogic.getDiceFaces(die.type)
         diceForMessage[#diceForMessage + 1] = {
             faces = faces,
             value = die.value
@@ -553,7 +537,7 @@ local function postDiceVisionRollToChat(rollData, rollInfo, pendingRoll)
     if not tokenid and pendingRoll.creature then
         tokenid = dmhub.LookupTokenId(pendingRoll.creature)
     end
-    local modifier = extractModifierFromRoll(pendingRoll.roll)
+    local modifier = DiceRollLogic.extractModifierFromRoll(pendingRoll.roll)
     local message = DiceVisionRollMessage.new{
         description = pendingRoll.description or "Roll",
         dice = diceForMessage,
@@ -580,12 +564,12 @@ handlePendingRoll = function(rollData)
         stopPolling()
     end
 
-    local modifier = extractModifierFromRoll(pendingRoll.originalRoll)
+    local modifier = DiceRollLogic.extractModifierFromRoll(pendingRoll.originalRoll)
     local diceSum = 0
-    local processedDice, droppedDice = applyDiceRules(rollData.dice, pendingRoll)
+    local processedDice, droppedDice = DiceRollLogic.applyDiceRules(rollData.dice, pendingRoll)
     local diceForMessage = {}
     for i, die in ipairs(processedDice) do
-        local faces = getDiceFaces(die.type)
+        local faces = DiceRollLogic.getDiceFaces(die.type)
         diceSum = diceSum + die.value
         diceForMessage[i] = {
             faces = faces,
@@ -603,11 +587,11 @@ handlePendingRoll = function(rollData)
 
     local edges = pendingRoll.edges or 0
     local banes = pendingRoll.banes or 0
-    local edgeBaneMod = GetRollModFromEdgesAndBanes(edges, banes)
+    local edgeBaneMod = DiceRollLogic.GetRollModFromEdgesAndBanes(edges, banes)
     local isNonTargeted = not pendingRoll.multitargets or #pendingRoll.multitargets == 0
     local baseTotal = diceSum + modifier
     local finalTotal = baseTotal + edgeBaneMod
-    local tier = CalculateTierWithEdges(finalTotal, edges, banes)
+    local tier = DiceRollLogic.CalculateTierWithEdges(finalTotal, edges, banes)
 
     local rollArgs = pendingRoll.rollArgs
     if not rollArgs then
@@ -665,7 +649,7 @@ handlePendingRoll = function(rollData)
     rollArgs.complete = function(rollInfo)
         local net = edges - banes
         if net >= 2 or net <= -2 then
-            local calculatedTier = CalculateTierWithEdges(finalTotal, edges, banes)
+            local calculatedTier = DiceRollLogic.CalculateTierWithEdges(finalTotal, edges, banes)
             local props = rollInfo.properties or {}
             if not props:try_get("overrideTier") then
                 props.overrideTier = calculatedTier
@@ -984,10 +968,10 @@ onBeforeRoll = function(context)
         return nil
     end
 
-    local edges, banes = SplitBoons(context.boons)
+    local edges, banes = DiceRollLogic.SplitBoons(context.boons)
 
     if edges == 0 and banes == 0 and context.roll then
-        edges, banes = ParseBoonsFromRollString(context.roll)
+        edges, banes = DiceRollLogic.ParseBoonsFromRollString(context.roll)
     end
 
     DiceVision.pendingRoll = {

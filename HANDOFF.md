@@ -79,7 +79,7 @@ The `RollDialog` table is declared at line 10 of DSRollDialog.lua with `OnBefore
 
 ### `DiceVision_5554/DiceRollLogic.lua`
 
-Pure roll utility and dice rule processing functions, extracted from DiceVision.lua for maintainability. Loaded before DiceVision.lua (alphabetical sort). All functions live on the global `DiceRollLogic` table; DiceVision.lua creates local aliases for them.
+Pure roll utility and dice rule processing functions, extracted from DiceVision.lua for maintainability. All functions live on the global `DiceRollLogic` table; DiceVision.lua calls them directly as `DiceRollLogic.func()` at runtime (no load-order dependency).
 
 **Functions:**
 

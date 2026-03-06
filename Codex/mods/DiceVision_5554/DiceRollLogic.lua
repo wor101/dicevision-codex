@@ -2,8 +2,8 @@
     DiceRollLogic - Pure roll utility and dice rule processing functions
     Extracted from DiceVision.lua for maintainability.
 
-    Loaded before DiceVision.lua (alphabetical sort: DiceR < DiceV).
-    All functions are on the global DiceRollLogic table so DiceVision.lua can alias them.
+    All functions are on the global DiceRollLogic table.
+    DiceVision.lua calls them as DiceRollLogic.func() at runtime (no load-order dependency).
 ]]
 
 DiceRollLogic = {}
