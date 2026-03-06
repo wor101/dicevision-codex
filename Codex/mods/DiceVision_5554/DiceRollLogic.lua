@@ -73,7 +73,7 @@ function DiceRollLogic.convertDiceTypes(dice, pendingRoll)
         if slot then
             local physicalFaces = DiceRollLogic.getDiceFaces(die.type)
             local expectedFaces = slot.faces
-            if physicalFaces ~= expectedFaces then
+            if physicalFaces == 6 and physicalFaces ~= expectedFaces then
                 -- Convert: e.g., d6 value -> d3 value
                 local converted = math.ceil(die.value * expectedFaces / physicalFaces)
                 -- Clamp to valid range
