@@ -77,9 +77,9 @@ The `RollDialog` table is declared at line 10 of DSRollDialog.lua with `OnBefore
 
 ## DiceVision Mod Files
 
-### `DiceVision_5554/DVRollLogic.lua`
+### `DiceVision_5554/DiceRollLogic.lua`
 
-Pure roll utility and dice rule processing functions, extracted from DiceVision.lua for maintainability. Loaded before DiceVision.lua (alphabetical sort). All functions live on the global `DVRollLogic` table; DiceVision.lua creates local aliases for them.
+Pure roll utility and dice rule processing functions, extracted from DiceVision.lua for maintainability. Loaded before DiceVision.lua (alphabetical sort). All functions live on the global `DiceRollLogic` table; DiceVision.lua creates local aliases for them.
 
 **Functions:**
 
@@ -120,7 +120,7 @@ local DiceVision = {
 }
 ```
 
-#### Edge/Bane Utility Functions (in DVRollLogic.lua)
+#### Edge/Bane Utility Functions (in DiceRollLogic.lua)
 
 | Function | Purpose | Returns |
 |----------|---------|---------|
@@ -281,7 +281,7 @@ DiceVision.rules = {
 }
 ```
 
-### Rule Processing Functions (in DVRollLogic.lua)
+### Rule Processing Functions (in DiceRollLogic.lua)
 
 | Function | Purpose | Parameters |
 |----------|---------|------------|
@@ -357,7 +357,7 @@ DiceVision's replace mode requires only the DiceVision mod files installed in Co
 
 | # | Requirement | Details |
 |---|-------------|---------|
-| 1 | **DiceVision mod files** | `DiceVision_5554/` folder with `DiceVision.lua`, `DVRollLogic.lua`, `DVDicePanel.lua`, and `Main.lua` in the Codex mods directory |
+| 1 | **DiceVision mod files** | `DiceVision_5554/` folder with `DiceVision.lua`, `DiceRollLogic.lua`, `DVDicePanel.lua`, and `Main.lua` in the Codex mods directory |
 
 No core Codex file modifications are needed. The `RollDialog.OnBeforeRoll` callback is built into the official DSRollDialog.lua. See the [official Codex repo](https://github.com/VerisimLLC/draw-steel-codex) for the source.
 

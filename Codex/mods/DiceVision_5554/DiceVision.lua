@@ -87,21 +87,21 @@ local function formatRollForChat(rollData)
     return string.format("[DiceVision] %s = %d", diceStr, rollData.total)
 end
 
--- Roll logic functions (defined in DVRollLogic.lua, loaded first alphabetically)
-local extractModifierFromRoll = DVRollLogic.extractModifierFromRoll
-local getDiceFaces = DVRollLogic.getDiceFaces
-local calculateTier = DVRollLogic.calculateTier
-local SplitBoons = DVRollLogic.SplitBoons
-local GetRollModFromEdgesAndBanes = DVRollLogic.GetRollModFromEdgesAndBanes
-local CalculateTierWithEdges = DVRollLogic.CalculateTierWithEdges
-local ParseBoonsFromRollString = DVRollLogic.ParseBoonsFromRollString
-local getTierRanges = DVRollLogic.getTierRanges
-local applyValueMappings = DVRollLogic.applyValueMappings
-local clampOutOfRangeValues = DVRollLogic.clampOutOfRangeValues
-local applyDiceSelection = DVRollLogic.applyDiceSelection
-local detectDiceSelection = DVRollLogic.detectDiceSelection
-local getEffectiveRules = DVRollLogic.getEffectiveRules
-local applyDiceRules = DVRollLogic.applyDiceRules
+-- Roll logic functions (defined in DiceRollLogic.lua, loaded first alphabetically)
+local extractModifierFromRoll = DiceRollLogic.extractModifierFromRoll
+local getDiceFaces = DiceRollLogic.getDiceFaces
+local calculateTier = DiceRollLogic.calculateTier
+local SplitBoons = DiceRollLogic.SplitBoons
+local GetRollModFromEdgesAndBanes = DiceRollLogic.GetRollModFromEdgesAndBanes
+local CalculateTierWithEdges = DiceRollLogic.CalculateTierWithEdges
+local ParseBoonsFromRollString = DiceRollLogic.ParseBoonsFromRollString
+local getTierRanges = DiceRollLogic.getTierRanges
+local applyValueMappings = DiceRollLogic.applyValueMappings
+local clampOutOfRangeValues = DiceRollLogic.clampOutOfRangeValues
+local applyDiceSelection = DiceRollLogic.applyDiceSelection
+local detectDiceSelection = DiceRollLogic.detectDiceSelection
+local getEffectiveRules = DiceRollLogic.getEffectiveRules
+local applyDiceRules = DiceRollLogic.applyDiceRules
 
 -- ============================================================================
 -- Custom Chat Message for Physical Dice Rolls

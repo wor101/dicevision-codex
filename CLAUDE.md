@@ -10,7 +10,7 @@ This repository contains a mod that integrates physical dice recognition (DiceVi
 | File | Purpose |
 |------|---------|
 | `Codex/mods/DiceVision_5554/DiceVision.lua` | Main mod - state, API polling, roll interception, commands, chat display |
-| `Codex/mods/DiceVision_5554/DVRollLogic.lua` | Pure roll utility & dice rule processing functions |
+| `Codex/mods/DiceVision_5554/DiceRollLogic.lua` | Pure roll utility & dice rule processing functions |
 | `Codex/mods/DiceVision_5554/DVDicePanel.lua` | Dice panel UI component |
 | `Codex/mods/DiceVision_5554/Main.lua` | Mod entry point |
 | `HANDOFF.md` | **Detailed technical documentation** - read this for implementation details |
@@ -45,5 +45,5 @@ Edges and banes cancel 1-for-1. Apply rules based on net (edges - banes):
 
 ## Common Tasks
 - **Debugging roll issues**: Check `handlePendingRoll()` in DiceVision.lua
-- **Edge/bane problems**: Two code paths exist - targeted vs non-targeted rolls. Core logic in DVRollLogic.lua
+- **Edge/bane problems**: Two code paths exist - targeted vs non-targeted rolls. Core logic in DiceRollLogic.lua
 - **API issues**: Check polling logic in DiceVision.lua (`longPollForRolls`)

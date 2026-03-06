@@ -1,18 +1,18 @@
 --[[
-    DVRollLogic - Pure roll utility and dice rule processing functions
+    DiceRollLogic - Pure roll utility and dice rule processing functions
     Extracted from DiceVision.lua for maintainability.
 
-    Loaded before DiceVision.lua (alphabetical sort: uppercase 'R' < lowercase 'i').
-    All functions are on the global DVRollLogic table so DiceVision.lua can alias them.
+    Loaded before DiceVision.lua (alphabetical sort: DiceR < DiceV).
+    All functions are on the global DiceRollLogic table so DiceVision.lua can alias them.
 ]]
 
-DVRollLogic = {}
+DiceRollLogic = {}
 
 -- ============================================================================
 -- Pure Utility Functions
 -- ============================================================================
 
-function DVRollLogic.extractModifierFromRoll(rollStr)
+function DiceRollLogic.extractModifierFromRoll(rollStr)
     if not rollStr then return 0 end
     local strippedStr = rollStr:gsub("%s+%d+%s+edges?%s*$", "")
     strippedStr = strippedStr:gsub("%s+%d+%s+banes?%s*$", "")
@@ -27,12 +27,12 @@ function DVRollLogic.extractModifierFromRoll(rollStr)
     return 0
 end
 
-function DVRollLogic.getDiceFaces(dieType)
+function DiceRollLogic.getDiceFaces(dieType)
     local faces = dieType:match("d(%d+)")
     return tonumber(faces) or 10
 end
 
-function DVRollLogic.calculateTier(total)
+function DiceRollLogic.calculateTier(total)
     if total >= 17 then
         return 3
     elseif total >= 12 then
@@ -42,7 +42,7 @@ function DVRollLogic.calculateTier(total)
     end
 end
 
-function DVRollLogic.SplitBoons(combinedBoons)
+function DiceRollLogic.SplitBoons(combinedBoons)
     combinedBoons = combinedBoons or 0
     if combinedBoons >= 0 then
         return combinedBoons, 0
@@ -55,7 +55,7 @@ end
 -- Net +1 = +2 modifier, net -1 = -2 modifier.
 -- Net >=2 or <=-2 produce no modifier (tier shift handled by CalculateTierWithEdges).
 -- Net 0 = no effect (cancelled out).
-function DVRollLogic.GetRollModFromEdgesAndBanes(edges, banes)
+function DiceRollLogic.GetRollModFromEdgesAndBanes(edges, banes)
     edges = edges or 0
     banes = banes or 0
     local net = edges - banes
@@ -71,8 +71,8 @@ end
 --- Calculate tier with edge/bane tier shifts using net cancellation.
 -- Net >=2 = +1 tier shift, net <=-2 = -1 tier shift.
 -- Tier is clamped to 1-3.
-function DVRollLogic.CalculateTierWithEdges(total, edges, banes)
-    local tier = DVRollLogic.calculateTier(total)
+function DiceRollLogic.CalculateTierWithEdges(total, edges, banes)
+    local tier = DiceRollLogic.calculateTier(total)
     local net = edges - banes
     if net >= 2 then
         tier = tier + 1
@@ -84,7 +84,7 @@ function DVRollLogic.CalculateTierWithEdges(total, edges, banes)
     return tier
 end
 
-function DVRollLogic.ParseBoonsFromRollString(rollString)
+function DiceRollLogic.ParseBoonsFromRollString(rollString)
     if not rollString then return 0, 0 end
     local edges = 0
     local banes = 0
@@ -99,7 +99,7 @@ function DVRollLogic.ParseBoonsFromRollString(rollString)
     return edges, banes
 end
 
-function DVRollLogic.getTierRanges()
+function DiceRollLogic.getTierRanges()
     return {
         { tier = 1, label = "1-11", min = nil, max = 11 },
         { tier = 2, label = "12-16", min = 12, max = 16 },
@@ -111,7 +111,7 @@ end
 -- Dice Rule Processing
 -- ============================================================================
 
-function DVRollLogic.applyValueMappings(dice, mappings)
+function DiceRollLogic.applyValueMappings(dice, mappings)
     if not mappings or next(mappings) == nil then
         return dice
     end
@@ -129,7 +129,7 @@ function DVRollLogic.applyValueMappings(dice, mappings)
     return result
 end
 
-function DVRollLogic.clampOutOfRangeValues(dice, isEnabled)
+function DiceRollLogic.clampOutOfRangeValues(dice, isEnabled)
     if not isEnabled then
         return dice
     end
@@ -150,7 +150,7 @@ function DVRollLogic.clampOutOfRangeValues(dice, isEnabled)
     return result
 end
 
-function DVRollLogic.applyDiceSelection(dice, selection)
+function DiceRollLogic.applyDiceSelection(dice, selection)
     if not selection or not selection.count then
         return dice
     end
@@ -171,7 +171,7 @@ function DVRollLogic.applyDiceSelection(dice, selection)
     return result, sorted
 end
 
-function DVRollLogic.detectDiceSelection(pendingRoll)
+function DiceRollLogic.detectDiceSelection(pendingRoll)
     if not pendingRoll or not pendingRoll.originalRoll then
         return nil
     end
@@ -195,26 +195,26 @@ function DVRollLogic.detectDiceSelection(pendingRoll)
     return nil
 end
 
-function DVRollLogic.getEffectiveRules(pendingRoll)
+function DiceRollLogic.getEffectiveRules(pendingRoll)
     local rules = {
         valueMappings = DiceVision.rules.valueMappings or {},
         diceSelection = DiceVision.rules.diceSelection,
     }
     if not rules.diceSelection then
-        rules.diceSelection = DVRollLogic.detectDiceSelection(pendingRoll)
+        rules.diceSelection = DiceRollLogic.detectDiceSelection(pendingRoll)
     end
     return rules
 end
 
-function DVRollLogic.applyDiceRules(dice, pendingRoll)
-    local rules = DVRollLogic.getEffectiveRules(pendingRoll)
+function DiceRollLogic.applyDiceRules(dice, pendingRoll)
+    local rules = DiceRollLogic.getEffectiveRules(pendingRoll)
     local processed = dice
     local droppedDice = nil
-    processed = DVRollLogic.clampOutOfRangeValues(processed, DiceVision.rules.clampOutOfRange)
-    processed = DVRollLogic.applyValueMappings(processed, rules.valueMappings)
+    processed = DiceRollLogic.clampOutOfRangeValues(processed, DiceVision.rules.clampOutOfRange)
+    processed = DiceRollLogic.applyValueMappings(processed, rules.valueMappings)
     if rules.diceSelection then
         local sorted
-        processed, sorted = DVRollLogic.applyDiceSelection(processed, rules.diceSelection)
+        processed, sorted = DiceRollLogic.applyDiceSelection(processed, rules.diceSelection)
         if sorted and #sorted > #processed then
             droppedDice = {}
             for i = #processed + 1, #sorted do
@@ -227,4 +227,4 @@ function DVRollLogic.applyDiceRules(dice, pendingRoll)
     return processed, droppedDice
 end
 
-print("DV: DVRollLogic loaded")
+print("DV: DiceRollLogic loaded")
