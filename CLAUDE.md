@@ -9,7 +9,8 @@ This repository contains a mod that integrates physical dice recognition (DiceVi
 
 | File | Purpose |
 |------|---------|
-| `Codex/mods/DiceVision_5554/DiceVision.lua` | Main mod - API polling, roll interception, chat display |
+| `Codex/mods/DiceVision_5554/DiceVision.lua` | Main mod - state, API polling, roll interception, commands, chat display |
+| `Codex/mods/DiceVision_5554/DVRollLogic.lua` | Pure roll utility & dice rule processing functions |
 | `Codex/mods/DiceVision_5554/DVDicePanel.lua` | Dice panel UI component |
 | `Codex/mods/DiceVision_5554/Main.lua` | Mod entry point |
 | `HANDOFF.md` | **Detailed technical documentation** - read this for implementation details |
@@ -23,14 +24,15 @@ This repository contains a mod that integrates physical dice recognition (DiceVi
 
 ## Draw Steel Edge/Bane Rules (Critical)
 
-| Situation | Effect |
-|-----------|--------|
-| 1 edge, 0 banes | +2 to roll |
-| 0 edges, 1 bane | -2 to roll |
-| 2+ edges, 0 banes | +1 tier shift |
-| 0 edges, 2+ banes | -1 tier shift |
-| Mixed (unequal) | +2 or -2 based on which is greater |
-| Equal | Cancel out |
+Edges and banes cancel 1-for-1. Apply rules based on net (edges - banes):
+
+| Net | Effect |
+|-----|--------|
+| +1 | +2 modifier |
+| -1 | -2 modifier |
+| +2 or more | +1 tier shift (no modifier) |
+| -2 or less | -1 tier shift (no modifier) |
+| 0 | No effect (cancelled out) |
 
 **Tier Thresholds**: T1 (1-11), T2 (12-16), T3 (17+)
 
@@ -42,6 +44,6 @@ This repository contains a mod that integrates physical dice recognition (DiceVi
 - `/dv rules <subcommand>` - Configure dice processing rules (map, keep, clamp, clear)
 
 ## Common Tasks
-- **Debugging roll issues**: Check `handlePendingRoll()` in DiceVision.lua (lines 562-694)
-- **Edge/bane problems**: Two code paths exist - targeted vs non-targeted rolls
-- **API issues**: Check polling logic (lines 431-475, 784-825)
+- **Debugging roll issues**: Check `handlePendingRoll()` in DiceVision.lua
+- **Edge/bane problems**: Two code paths exist - targeted vs non-targeted rolls. Core logic in DVRollLogic.lua
+- **API issues**: Check polling logic in DiceVision.lua (`longPollForRolls`)
