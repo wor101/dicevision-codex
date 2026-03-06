@@ -30,6 +30,79 @@ function DiceRollLogic.getDiceFaces(dieType)
     return tonumber(faces) or 10
 end
 
+function DiceRollLogic.parseExpectedDiceTypes(rollStr)
+    if not rollStr then return {} end
+    local result = {}
+    for count, faces in rollStr:gmatch("(%d+)d(%d+)") do
+        result[#result + 1] = {
+            count = tonumber(count),
+            faces = tonumber(faces),
+            type = "d" .. faces,
+        }
+    end
+    return result
+end
+
+function DiceRollLogic.convertDiceTypes(dice, pendingRoll)
+    if not DiceVision.rules.convertDice then
+        return dice
+    end
+    if not pendingRoll or not pendingRoll.originalRoll then
+        return dice
+    end
+
+    local expectedTypes = DiceRollLogic.parseExpectedDiceTypes(pendingRoll.originalRoll)
+    if #expectedTypes == 0 then
+        return dice
+    end
+
+    -- Expand expected types into ordered slots: {count=2, type="d3"} -> two d3 slots
+    local expectedSlots = {}
+    for _, entry in ipairs(expectedTypes) do
+        for i = 1, entry.count do
+            expectedSlots[#expectedSlots + 1] = {
+                faces = entry.faces,
+                type = entry.type,
+            }
+        end
+    end
+
+    local result = {}
+    for i, die in ipairs(dice) do
+        local slot = expectedSlots[i]
+        if slot then
+            local physicalFaces = DiceRollLogic.getDiceFaces(die.type)
+            local expectedFaces = slot.faces
+            if physicalFaces ~= expectedFaces then
+                -- Convert: e.g., d6 value -> d3 value
+                local converted = math.ceil(die.value * expectedFaces / physicalFaces)
+                -- Clamp to valid range
+                if converted < 1 then converted = 1 end
+                if converted > expectedFaces then converted = expectedFaces end
+                print(string.format("[DiceVision] Converted %s:%d -> %s:%d",
+                    die.type, die.value, slot.type, converted))
+                result[i] = {
+                    type = slot.type,
+                    value = converted,
+                    physicalType = die.type,
+                    physicalValue = die.value,
+                }
+            else
+                result[i] = {
+                    type = die.type,
+                    value = die.value,
+                }
+            end
+        else
+            result[i] = {
+                type = die.type,
+                value = die.value,
+            }
+        end
+    end
+    return result
+end
+
 function DiceRollLogic.calculateTier(total)
     if total >= 17 then
         return 3
@@ -208,6 +281,9 @@ function DiceRollLogic.applyDiceRules(dice, pendingRoll)
     local rules = DiceRollLogic.getEffectiveRules(pendingRoll)
     local processed = dice
     local droppedDice = nil
+    -- 0. Convert dice types (e.g., physical d6 -> virtual d3)
+    processed = DiceRollLogic.convertDiceTypes(processed, pendingRoll)
+    -- 1. Clamp out-of-range values
     processed = DiceRollLogic.clampOutOfRangeValues(processed, DiceVision.rules.clampOutOfRange)
     processed = DiceRollLogic.applyValueMappings(processed, rules.valueMappings)
     if rules.diceSelection then

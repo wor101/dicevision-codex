@@ -87,6 +87,8 @@ Pure roll utility and dice rule processing functions, extracted from DiceVision.
 |----------|---------|
 | `extractModifierFromRoll(str)` | Get modifier from "2d10+5" |
 | `getDiceFaces(dieType)` | Get face count from "d10" |
+| `parseExpectedDiceTypes(rollStr)` | Parse "2d3+5" into expected dice type slots |
+| `convertDiceTypes(dice, pendingRoll)` | Convert physical dice to expected types (e.g., d6→d3) |
 | `calculateTier(total)` | Raw tier from total (1-11=T1, 12-16=T2, 17+=T3) |
 | `SplitBoons(combined)` | Convert combined boons value to (edges, banes) |
 | `GetRollModFromEdgesAndBanes(e, b)` | Net-based ±2 modifier (net ±1 only) |
@@ -278,6 +280,7 @@ DiceVision.rules = {
     valueMappings = {},      -- {dieType = {fromValue = toValue}}
     diceSelection = nil,     -- {keep = "highest"|"lowest", count = N}
     clampOutOfRange = false, -- Clamp values outside 0-10 to 1
+    convertDice = true,      -- Auto-convert d6 values for d3 rolls (default ON)
 }
 ```
 
@@ -296,6 +299,9 @@ DiceVision.rules = {
 
 ```lua
 function applyDiceRules(dice, pendingRoll)
+    -- 0. Convert dice types (e.g., physical d6 -> virtual d3)
+    processed = convertDiceTypes(processed, pendingRoll)
+
     -- 1. Clamp out-of-range values first (before mappings)
     processed = clampOutOfRangeValues(processed, DiceVision.rules.clampOutOfRange)
 
@@ -318,6 +324,7 @@ end
 | `/dv rules keep <highest\|lowest> <count>` | Override dice selection |
 | `/dv rules keep auto` | Use auto-detection from roll context |
 | `/dv rules clamp <on\|off>` | Toggle out-of-range clamping |
+| `/dv rules convert <on\|off>` | Toggle d6→d3 dice conversion (default: ON) |
 | `/dv rules clear` | Reset to default rules |
 | `/dv rules clear all` | Clear all rules (no defaults) |
 
@@ -328,6 +335,18 @@ When `clampOutOfRange` is enabled:
 - Values < 0 or > 10 are clamped to 1
 - Logs clamped values: `[DiceVision] Clamped d10 value 14 -> 1 (out of 0-10 range)`
 - Useful for handling DiceVision misreads
+
+### Dice Conversion (d6 → d3)
+
+When `convertDice` is enabled (default: ON):
+- Parses expected dice types from the roll string (e.g., `"1d3+2"` expects a d3)
+- If a physical die type doesn't match the expected type, converts the value using: `math.ceil(physicalValue * expectedFaces / physicalFaces)`
+- Example: d6 values 1-2→1, 3-4→2, 5-6→3 for d3 rolls
+- Sets `physicalType` and `physicalValue` on converted dice for display (shows d6 icon with converted d3 value)
+- Generic formula works for any die-size conversion, not hardcoded to d3
+- Panel rolls are unaffected (`postRollToChat()` passes nil for pendingRoll; conversion returns early)
+- Disable with `/dv rules convert off` if using physical d3 dice
+- `clear` resets to ON (default); `clear all` sets to OFF
 
 ---
 

@@ -50,6 +50,7 @@ DiceVision.rules = {
     valueMappings = {},
     diceSelection = nil,
     clampOutOfRange = false,
+    convertDice = true,  -- Auto-convert d6 values for d3 rolls (default ON)
 }
 
 -- Apply default rules on load
@@ -576,12 +577,14 @@ handlePendingRoll = function(rollData)
     local processedDice, droppedDice = DiceRollLogic.applyDiceRules(rollData.dice, pendingRoll)
     local diceForMessage = {}
     for i, die in ipairs(processedDice) do
-        local faces = DiceRollLogic.getDiceFaces(die.type)
+        local faces = die.physicalType
+            and DiceRollLogic.getDiceFaces(die.physicalType)
+            or DiceRollLogic.getDiceFaces(die.type)
         diceSum = diceSum + die.value
         diceForMessage[i] = {
             faces = faces,
             value = die.value,
-            originalValue = die.originalValue,
+            originalValue = die.originalValue or die.physicalValue,
         }
     end
     print(string.format("DV: handlePendingRoll - diceSum=%d, processedDice=%d, droppedDice=%d",
@@ -879,6 +882,7 @@ Commands.dv = function(args)
             msg = msg .. "  Dice selection: " .. (DiceVision.rules.diceSelection and
                 string.format("keep %s %d", DiceVision.rules.diceSelection.keep, DiceVision.rules.diceSelection.count) or "auto-detect") .. "\n"
             msg = msg .. "  Out-of-range clamping: " .. (DiceVision.rules.clampOutOfRange and "enabled" or "disabled")
+            msg = msg .. "\n  Dice conversion: " .. (DiceVision.rules.convertDice and "enabled" or "disabled")
             chat.Send(msg)
 
         elseif action == "map" then
@@ -919,13 +923,26 @@ Commands.dv = function(args)
                 chat.Send("[DiceVision] Out-of-range clamping: " .. status .. "\nUsage: /dv rules clamp <on|off>")
             end
 
+        elseif action == "convert" then
+            local mode = parts[3]
+            if mode == "on" then
+                DiceVision.rules.convertDice = true
+                chat.Send("[DiceVision] Dice conversion enabled (d6 values auto-converted for d3 rolls)")
+            elseif mode == "off" then
+                DiceVision.rules.convertDice = false
+                chat.Send("[DiceVision] Dice conversion disabled (use if you have physical d3 dice)")
+            else
+                local status = DiceVision.rules.convertDice and "enabled" or "disabled"
+                chat.Send("[DiceVision] Dice conversion: " .. status .. "\nUsage: /dv rules convert <on|off>")
+            end
+
         elseif action == "clear" then
             local clearAll = parts[3] == "all"
             if clearAll then
-                DiceVision.rules = {valueMappings = {}, diceSelection = nil, clampOutOfRange = false}
+                DiceVision.rules = {valueMappings = {}, diceSelection = nil, clampOutOfRange = false, convertDice = false}
                 chat.Send("[DiceVision] All rules cleared (including defaults)")
             else
-                DiceVision.rules = {valueMappings = {}, diceSelection = nil, clampOutOfRange = false}
+                DiceVision.rules = {valueMappings = {}, diceSelection = nil, clampOutOfRange = false, convertDice = true}
                 for dieType, mappings in pairs(DEFAULT_RULES.valueMappings) do
                     DiceVision.rules.valueMappings[dieType] = {}
                     for from, to in pairs(mappings) do
@@ -943,6 +960,7 @@ Commands.dv = function(args)
   /dv rules keep <mode> <count>     - Keep highest/lowest N dice
   /dv rules keep auto               - Auto-detect from roll context
   /dv rules clamp <on|off>          - Clamp values outside 0-10 to 1
+  /dv rules convert <on|off>       - Auto-convert d6 values for d3 rolls
   /dv rules clear                   - Reset rules to defaults
   /dv rules clear all               - Clear all rules (including defaults)
 ]=])
