@@ -739,6 +739,40 @@ end
 DiceVision.startPolling = startPolling
 DiceVision.postRollToChat = postRollToChat
 
+-- Public mode setter (used by /dv mode command and DVDicePanel toggle)
+DiceVision.setMode = function(newMode)
+    if newMode ~= "off" and newMode ~= "replace" then
+        return false
+    end
+    local oldMode = DiceVision.mode
+    if oldMode == newMode then return true end
+
+    DiceVision.mode = newMode
+
+    if newMode == "off" then
+        -- If a pending ability roll exists, fall back to virtual dice
+        if DiceVision.waitingForRoll and DiceVision.pendingRoll then
+            local rollArgs = DiceVision.pendingRoll.rollArgs
+            DiceVision.waitingForRoll = false
+            DiceVision.pendingRoll = nil
+            DiceVision.currentRequestId = generateRequestId()
+            hideWaitingDialog()
+            if rollArgs then
+                dmhub.Roll(rollArgs)
+            end
+        end
+        stopPolling()
+        removeRollInterceptor()
+    elseif newMode == "replace" then
+        -- Re-register callback (removeRollInterceptor sets it to false)
+        if RollDialog then
+            RollDialog.OnBeforeRoll = onBeforeRoll
+        end
+    end
+
+    return true
+end
+
 -- ============================================================================
 -- Commands
 -- ============================================================================
@@ -802,14 +836,7 @@ Commands.dv = function(args)
         end
 
         local oldMode = DiceVision.mode
-        DiceVision.mode = newMode
-
-        if newMode == "off" then
-            stopPolling()
-            removeRollInterceptor()
-        end
-        -- No action needed for replace mode - dmhub.Roll wrapper handles interception
-
+        DiceVision.setMode(newMode)
         chat.Send("[DiceVision] Mode changed: " .. oldMode .. " -> " .. newMode)
 
     elseif subcommand == "test" then
