@@ -386,7 +386,92 @@ No core Codex file modifications are needed. The `RollDialog.OnBeforeRoll` callb
 
 1. Action Log shows total rather than individual dice values (visual panel compensates)
 2. Requires active DiceVision API connection
-3. Only works with Draw Steel roll dialogs (DSRollDialog.lua)
+3. Only works with Draw Steel roll dialogs (DSRollDialog.lua) -- table rolls (e.g., Piety) are not intercepted (see [Needed PR: RollOnTableDialog.lua Hook](#needed-pr-rollontabledialoglua-hook) below)
+
+---
+
+## Needed PR: RollOnTableDialog.lua Hook
+
+### Problem
+
+"Roll on Table" dialogs (e.g., Piety tables) use `RollOnTableDialog.lua` (`DMHub Game Hud/RollOnTableDialog.lua`), which calls `dmhub.Roll{...}` directly. This bypasses `DSRollDialog.lua` entirely, so the `RollDialog.OnBeforeRoll` hook never fires and DiceVision cannot intercept these rolls.
+
+Wrapping `dmhub.Roll` at the Lua level does not work -- the engine calls the original C# implementation regardless of Lua-side reassignment (same finding as with DSRollDialog before the official hook was added).
+
+### Where the Hook Should Go
+
+In `RollOnTableDialog.lua`, the `rollDiceButton` click handler (line 166) calls `dmhub.Roll{...}` at line 179. The hook should be inserted **before** this `dmhub.Roll` call, giving external mods the opportunity to intercept the roll.
+
+**Current code (lines 166-222):**
+```lua
+events = {
+    click = function(element)
+        rollDiceButton:SetClass("collapsed", true)
+        m_hasClose = true
+
+        local tokenid = nil
+        if m_options.creature ~= nil then
+            tokenid = dmhub.LookupTokenId(m_options.creature)
+        end
+
+        m_options.rollProperties.tableRef = m_options.tableRef
+        print("ROLL PROPERTIES:", json(m_options.rollProperties))
+
+        dmhub.Roll{                -- line 179: no hook before this call
+            guid = m_guid,
+            description = string.format("Roll on %s", m_table.name),
+            ...
+        }
+    end,
+}
+```
+
+### Proposed Hook Pattern
+
+Add an `OnBeforeRoll` callback field on a `RollOnTableDialog` table, mirroring the `RollDialog.OnBeforeRoll` pattern from DSRollDialog.lua (lines 3247-3268). The hook should be called just before `dmhub.Roll{...}` and, if it returns `"intercept"`, the `dmhub.Roll` call should be skipped.
+
+**Proposed change:**
+
+At the top of the file, declare the callback field:
+```lua
+RollOnTableDialog = {
+    OnBeforeRoll = false,
+}
+```
+
+Inside the `rollDiceButton` click handler, before `dmhub.Roll{...}`:
+```lua
+-- Hook for external mods to intercept table rolls
+local hookResult = nil
+if RollOnTableDialog.OnBeforeRoll then
+    hookResult = RollOnTableDialog.OnBeforeRoll({
+        rollArgs = {
+            guid = m_guid,
+            description = string.format("Roll on %s", m_table.name),
+            tokenid = tokenid,
+            roll = m_table:CalculateRollInfo().roll,
+            creature = m_options.creature,
+            properties = m_options.rollProperties,
+        },
+        roll = m_table:CalculateRollInfo().roll,
+        description = string.format("Roll on %s", m_table.name),
+        creature = m_options.creature,
+        tokenid = tokenid,
+    })
+end
+
+if hookResult == "intercept" then
+    return
+end
+```
+
+### Action Required
+
+This requires a PR to the official Codex repo: https://github.com/VerisimLLC/draw-steel-codex
+
+The file to modify is `DMHub Game Hud/RollOnTableDialog.lua`. The change follows the same pattern that was accepted for `DSRollDialog.lua` (see [History](#history-how-the-hook-was-added-to-codex) below).
+
+Once the hook is merged, DiceVision can register a callback on `RollOnTableDialog.OnBeforeRoll` (similar to how it registers on `RollDialog.OnBeforeRoll`) to intercept table rolls without any core file modifications.
 
 ---
 
