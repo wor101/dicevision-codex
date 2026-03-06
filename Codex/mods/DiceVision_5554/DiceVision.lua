@@ -986,10 +986,10 @@ onBeforeRoll = function(context)
     print(string.format("DV: onBeforeRoll - roll='%s', boons=%s, description='%s'",
         tostring(context.roll), tostring(context.boons), tostring(context.description)))
 
-    local edges, banes = DiceRollLogic.SplitBoons(context.boons)
+    local edges, banes = DiceRollLogic.ParseBoonsFromRollString(context.roll)
 
-    if edges == 0 and banes == 0 and context.roll then
-        edges, banes = DiceRollLogic.ParseBoonsFromRollString(context.roll)
+    if edges == 0 and banes == 0 then
+        edges, banes = DiceRollLogic.SplitBoons(context.boons)
     end
 
     print(string.format("DV: onBeforeRoll - parsed edges=%d, banes=%d, multitargets=%s",
