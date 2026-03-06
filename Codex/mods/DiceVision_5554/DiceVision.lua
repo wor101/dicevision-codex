@@ -367,6 +367,9 @@ local function handleSessionExpired()
 end
 
 local function handleDiceVisionRoll(rollData)
+    print(string.format("DV: handleDiceVisionRoll - panelWaiting=%s, mode=%s, waitingForRoll=%s, dice=%s",
+        tostring(DiceVision.panelWaitingForRoll), DiceVision.mode, tostring(DiceVision.waitingForRoll),
+        formatDice(rollData.dice)))
     -- Handle panel-initiated roll first
     if DiceVision.panelWaitingForRoll then
         postRollToChat(rollData)
@@ -509,7 +512,7 @@ postRollToChat = function(rollData)
     }
     chat.SendCustom(message)
     DiceVision.panelTokenId = nil  -- Clear after use
-    print(string.format("DBG: DiceVision roll posted to chat: total=%d, tier=%d", total, tier))
+    print(string.format("DV: postRollToChat - total=%d, tier=%d", total, tier))
 end
 
 -- ============================================================================
@@ -525,6 +528,9 @@ hideWaitingDialog = function()
 end
 
 local function postDiceVisionRollToChat(rollData, rollInfo, pendingRoll)
+    local modifier = DiceRollLogic.extractModifierFromRoll(pendingRoll.roll)
+    print(string.format("DV: postDiceVisionRollToChat - modifier=%d, total=%d, tier=%s",
+        modifier, rollInfo.total, tostring(rollInfo.tiers)))
     local diceForMessage = {}
     for _, die in ipairs(rollData.dice) do
         local faces = DiceRollLogic.getDiceFaces(die.type)
@@ -537,7 +543,6 @@ local function postDiceVisionRollToChat(rollData, rollInfo, pendingRoll)
     if not tokenid and pendingRoll.creature then
         tokenid = dmhub.LookupTokenId(pendingRoll.creature)
     end
-    local modifier = DiceRollLogic.extractModifierFromRoll(pendingRoll.roll)
     local message = DiceVisionRollMessage.new{
         description = pendingRoll.description or "Roll",
         dice = diceForMessage,
@@ -565,6 +570,8 @@ handlePendingRoll = function(rollData)
     end
 
     local modifier = DiceRollLogic.extractModifierFromRoll(pendingRoll.originalRoll)
+    print(string.format("DV: handlePendingRoll - originalRoll='%s', modifier=%d",
+        tostring(pendingRoll.originalRoll), modifier))
     local diceSum = 0
     local processedDice, droppedDice = DiceRollLogic.applyDiceRules(rollData.dice, pendingRoll)
     local diceForMessage = {}
@@ -577,6 +584,8 @@ handlePendingRoll = function(rollData)
             originalValue = die.originalValue,
         }
     end
+    print(string.format("DV: handlePendingRoll - diceSum=%d, processedDice=%d, droppedDice=%d",
+        diceSum, #processedDice, droppedDice and #droppedDice or 0))
     if droppedDice and #droppedDice > 0 then
         local droppedValues = {}
         for _, die in ipairs(droppedDice) do
@@ -592,6 +601,9 @@ handlePendingRoll = function(rollData)
     local baseTotal = diceSum + modifier
     local finalTotal = baseTotal + edgeBaneMod
     local tier = DiceRollLogic.CalculateTierWithEdges(finalTotal, edges, banes)
+
+    print(string.format("DV: handlePendingRoll - edges=%d, banes=%d, net=%d, edgeBaneMod=%d, baseTotal=%d, finalTotal=%d, tier=%d",
+        edges, banes, edges - banes, edgeBaneMod, baseTotal, finalTotal, tier))
 
     local rollArgs = pendingRoll.rollArgs
     if not rollArgs then
@@ -614,6 +626,9 @@ handlePendingRoll = function(rollData)
         rollSource = "ability",
     }
     rollArgs.instant = true
+
+    print(string.format("DV: handlePendingRoll - isNonTargeted=%s, rollArgs.roll='%s'",
+        tostring(isNonTargeted), tostring(rollArgs.roll)))
 
     if isNonTargeted then
         local boonsValue = edges - banes
@@ -968,11 +983,17 @@ onBeforeRoll = function(context)
         return nil
     end
 
+    print(string.format("DV: onBeforeRoll - roll='%s', boons=%s, description='%s'",
+        tostring(context.roll), tostring(context.boons), tostring(context.description)))
+
     local edges, banes = DiceRollLogic.SplitBoons(context.boons)
 
     if edges == 0 and banes == 0 and context.roll then
         edges, banes = DiceRollLogic.ParseBoonsFromRollString(context.roll)
     end
+
+    print(string.format("DV: onBeforeRoll - parsed edges=%d, banes=%d, multitargets=%s",
+        edges, banes, tostring(context.multitargets and #context.multitargets or 0)))
 
     DiceVision.pendingRoll = {
         rollArgs = context.rollArgs,
