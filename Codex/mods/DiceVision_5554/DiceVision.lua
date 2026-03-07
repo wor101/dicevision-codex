@@ -86,11 +86,13 @@ local function formatDice(dice)
     end
     return table.concat(parts, ", ")
 end
+DiceVision.formatDice = formatDice
 
 local function formatRollForChat(rollData)
     local diceStr = formatDice(rollData.dice)
     return string.format("[DiceVision] %s = %d", diceStr, rollData.total)
 end
+DiceVision.formatRollForChat = formatRollForChat
 
 -- ============================================================================
 -- Custom Chat Message for Physical Dice Rolls

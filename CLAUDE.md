@@ -44,7 +44,30 @@ Edges and banes cancel 1-for-1. Apply rules based on net (edges - banes):
 - `/dv rules <subcommand>` - Configure dice processing rules (map, keep, clamp, clear)
 
 ## Coding Rules
-- **ASCII only in Lua files**: Never use non-ASCII / UTF-8 characters (e.g. `→`, `—`, curly quotes) anywhere in `.lua` source files — not in strings, comments, or identifiers. Codex's Lua parser cannot handle multi-byte characters and will fail with misleading syntax errors. Use ASCII equivalents instead (e.g. `->`, `--`, straight quotes).
+- **ASCII only in Lua files**: Never use non-ASCII / UTF-8 characters (e.g. `->`, `--`, curly quotes) anywhere in `.lua` source files — not in strings, comments, or identifiers. Codex's Lua parser cannot handle multi-byte characters and will fail with misleading syntax errors. Use ASCII equivalents instead (e.g. `->`, `--`, straight quotes).
+
+## Testing
+
+Tests use [Busted](https://lunarmodules.github.io/busted/) (BDD-style Lua testing framework). Test files live in `tests/`.
+
+| File | Purpose |
+|------|---------|
+| `.busted` | Busted configuration |
+| `tests/helpers/test_setup.lua` | Shared setup: loads modules, stubs globals |
+| `tests/spec/dice_roll_logic_spec.lua` | Tests for all DiceRollLogic functions |
+
+**Run tests:**
+```bash
+busted                    # run all tests
+busted --verbose          # verbose output
+busted -t "functionName"  # run specific test by name
+```
+
+**Requirements:**
+- Always add tests for new features and bug fixes
+- Always run all existing tests (`busted`) after any code changes and verify they pass before considering work complete
+- Test files go in `tests/spec/` with the `_spec.lua` suffix
+- Shared helpers go in `tests/helpers/`
 
 ## Common Tasks
 - **Debugging roll issues**: Check `handlePendingRoll()` in DiceVision.lua
