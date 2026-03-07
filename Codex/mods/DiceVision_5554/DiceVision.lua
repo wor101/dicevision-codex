@@ -286,15 +286,18 @@ function DiceVisionRollMessage.Render(self, message)
         text = tostring(total),
     }
 
-    local tierRangeLabel = DiceVisionRollMessage.GetTierLabel(tier)
-    local tierLabel = gui.Label{
-        width = "100%",
-        height = "auto",
-        fontSize = 14,
-        color = "#888888",
-        tmargin = 4,
-        text = string.format("%s    tier %d result", tierRangeLabel, tier),
-    }
+    local tierLabel = nil
+    if rollSource ~= "panel" then
+        local tierRangeLabel = DiceVisionRollMessage.GetTierLabel(tier)
+        tierLabel = gui.Label{
+            width = "100%",
+            height = "auto",
+            fontSize = 14,
+            color = "#888888",
+            tmargin = 4,
+            text = string.format("%s    tier %d result", tierRangeLabel, tier),
+        }
+    end
 
     return gui.Panel{
         width = "100%",
