@@ -275,7 +275,7 @@ function DiceVisionRollMessage.Render(self, message)
     end
 
     local totalLabel = gui.Label{
-        width = 60,
+        width = 80,
         height = 50,
         halign = "right",
         valign = "center",
