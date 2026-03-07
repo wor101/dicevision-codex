@@ -66,6 +66,7 @@ local diceVisionPanelStyles = {
     -- Toggle button styles
     {
         classes = "dvToggle",
+        bgimage = "panels/square.png",
         bgcolor = "#2d7a2d",
         width = "auto",
         height = 22,
@@ -130,6 +131,13 @@ CreateDiceVisionPanel = function()
             local isPaused = isConnected and DiceVision.mode == "off"
             toggleButton:SetClass("disabled", not isConnected)
             toggleButton:SetClass("paused", isPaused)
+            if not isConnected then
+                toggleButton.selfStyle.bgcolor = "#333333"
+            elseif isPaused then
+                toggleButton.selfStyle.bgcolor = "#7a5a1d"
+            else
+                toggleButton.selfStyle.bgcolor = "#2d7a2d"
+            end
             if toggleLabel then
                 if not isConnected then
                     toggleLabel.text = "---"
@@ -254,6 +262,15 @@ CreateDiceVisionPanel = function()
 
     toggleButton = gui.Panel{
         classes = "dvToggle",
+        bgimage = "panels/square.png",
+        bgcolor = "#2d7a2d",
+        width = 80,
+        height = 22,
+        halign = "center",
+        valign = "center",
+        cornerRadius = 4,
+        hpad = 12,
+        vpad = 2,
 
         hover = gui.Tooltip{
             text = "Toggle roll interception on/off",
@@ -278,7 +295,14 @@ CreateDiceVisionPanel = function()
             updateState()
         end,
 
-        toggleLabel,
+        gui.Panel{
+            interactable = false,
+            width = "100%",
+            height = "100%",
+            halign = "center",
+            valign = "center",
+            toggleLabel,
+        },
     }
 
     local resultPanel = gui.Panel{
