@@ -77,7 +77,12 @@ DiceVision.generateRequestId = generateRequestId
 local function formatDice(dice)
     local parts = {}
     for _, die in ipairs(dice) do
-        table.insert(parts, string.format("%s:%s", die.type, tostring(die.value)))
+        local raw = die.rawValue
+        if raw ~= nil and tostring(raw) ~= tostring(die.value) then
+            table.insert(parts, string.format("%s:'%s'->%s", die.type, tostring(raw), tostring(die.value)))
+        else
+            table.insert(parts, string.format("%s:%s", die.type, tostring(die.value)))
+        end
     end
     return table.concat(parts, ", ")
 end
@@ -384,11 +389,16 @@ local function handleSessionExpired()
 end
 
 local function handleDiceVisionRoll(rollData)
-    -- Preserve raw string values and convert to numeric
-    for _, die in ipairs(rollData.dice) do
-        die.rawValue = die.value  -- Preserve original string (e.g., "00", "30", "7")
-        die.value = tonumber(die.value) or 0
+    -- Build new dice tables from API response (net.Get tables don't support assignment)
+    local convertedDice = {}
+    for i, die in ipairs(rollData.dice) do
+        convertedDice[i] = {
+            type = die.type,
+            rawValue = die.value,  -- Preserve original string (e.g., "00", "30", "7")
+            value = tonumber(die.value) or 0,
+        }
     end
+    rollData = { dice = convertedDice, total = rollData.total }
 
     print(string.format("DV: handleDiceVisionRoll - panelWaiting=%s, mode=%s, waitingForRoll=%s, dice=%s",
         tostring(DiceVision.panelWaitingForRoll), DiceVision.mode, tostring(DiceVision.waitingForRoll),
@@ -507,8 +517,8 @@ postRollToChat = function(rollData)
     local percentile = DiceRollLogic.detectPercentilePair(rollData.dice)
     if percentile then
         local diceForMessage = {
-            { faces = 10, value = percentile.tens.value, rawValue = tostring(percentile.tens.rawValue) },
-            { faces = 10, value = percentile.units.value, rawValue = tostring(percentile.units.rawValue) },
+            { faces = 10, value = tostring(percentile.tens.rawValue) },   -- "00" shows as "00"
+            { faces = 10, value = tostring(percentile.units.rawValue) },  -- "7" shows as "7"
         }
         local total = percentile.total
         local tier = DiceRollLogic.calculateTier(total)
