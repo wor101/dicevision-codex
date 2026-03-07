@@ -539,7 +539,7 @@ postRollToChat = function(rollData)
         return
     end
 
-    -- Standard path: apply dice rules (including 0→10 mapping for standard d10s)
+    -- Standard path: apply dice rules (including 0->10 mapping for standard d10s)
     local processedDice, droppedDice = DiceRollLogic.applyDiceRules(rollData.dice, nil)
     local diceForMessage = {}
     local diceSum = 0

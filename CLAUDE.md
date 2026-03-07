@@ -43,6 +43,9 @@ Edges and banes cancel 1-for-1. Apply rules based on net (edges - banes):
 - `/dv mode <off|replace>` - Set operation mode
 - `/dv rules <subcommand>` - Configure dice processing rules (map, keep, clamp, clear)
 
+## Coding Rules
+- **ASCII only in Lua files**: Never use non-ASCII / UTF-8 characters (e.g. `→`, `—`, curly quotes) anywhere in `.lua` source files — not in strings, comments, or identifiers. Codex's Lua parser cannot handle multi-byte characters and will fail with misleading syntax errors. Use ASCII equivalents instead (e.g. `->`, `--`, straight quotes).
+
 ## Common Tasks
 - **Debugging roll issues**: Check `handlePendingRoll()` in DiceVision.lua
 - **Edge/bane problems**: Two code paths exist - targeted vs non-targeted rolls. Core logic in DiceRollLogic.lua
