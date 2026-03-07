@@ -18,8 +18,8 @@ DockablePanel.Register{
     notitle = true,
     vscroll = false,
     dmonly = false,
-    minHeight = 68,
-    maxHeight = 68,
+    minHeight = 100,
+    maxHeight = 100,
     content = function()
         return CreateDiceVisionPanel()
     end,
@@ -63,6 +63,32 @@ local diceVisionPanelStyles = {
         scale = 1.1,
         brightness = 1.2,
     },
+    -- Toggle button styles
+    {
+        classes = "dvToggle",
+        bgimage = "panels/square.png",
+        bgcolor = "#2d7a2d",
+        width = "auto",
+        height = 22,
+        halign = "center",
+        valign = "center",
+        cornerRadius = 4,
+        hpad = 12,
+        vpad = 2,
+    },
+    {
+        classes = {"dvToggle", "paused"},
+        bgcolor = "#7a5a1d",
+    },
+    {
+        classes = {"dvToggle", "disabled"},
+        bgcolor = "#333333",
+        brightness = 0.3,
+    },
+    {
+        classes = {"dvToggle", "hover"},
+        brightness = 1.2,
+    },
 }
 
 -- ============================================================================
@@ -78,6 +104,8 @@ CreateDiceVisionPanel = function()
     local statusLabel
     local statusShadow
     local diceButton
+    local toggleButton
+    local toggleLabel
 
     local updateState = function()
         if diceButton then
@@ -90,11 +118,35 @@ CreateDiceVisionPanel = function()
                 text = "Disconnected"
             elseif DiceVision.panelWaitingForRoll then
                 text = "Rolling..."
+            elseif DiceVision.mode == "off" then
+                text = "Paused"
             else
                 text = "Roll Dice"
             end
             statusLabel.text = text
             statusShadow.text = text
+        end
+        if toggleButton then
+            local isConnected = DiceVision.connected
+            local isPaused = isConnected and DiceVision.mode == "off"
+            toggleButton:SetClass("disabled", not isConnected)
+            toggleButton:SetClass("paused", isPaused)
+            if not isConnected then
+                toggleButton.selfStyle.bgcolor = "#333333"
+            elseif isPaused then
+                toggleButton.selfStyle.bgcolor = "#7a5a1d"
+            else
+                toggleButton.selfStyle.bgcolor = "#2d7a2d"
+            end
+            if toggleLabel then
+                if not isConnected then
+                    toggleLabel.text = "---"
+                elseif isPaused then
+                    toggleLabel.text = "Paused"
+                else
+                    toggleLabel.text = "Active"
+                end
+            end
         end
     end
 
@@ -195,6 +247,64 @@ CreateDiceVisionPanel = function()
         },
     }
 
+    toggleLabel = gui.Label{
+        interactable = false,
+        width = "auto",
+        height = "auto",
+        halign = "center",
+        valign = "center",
+        fontFace = "Book",
+        fontSize = 10,
+        bold = true,
+        color = "white",
+        text = "Active",
+    }
+
+    toggleButton = gui.Panel{
+        classes = "dvToggle",
+        bgimage = "panels/square.png",
+        bgcolor = "#2d7a2d",
+        width = 80,
+        height = 22,
+        halign = "center",
+        valign = "center",
+        cornerRadius = 4,
+        hpad = 12,
+        vpad = 2,
+
+        hover = gui.Tooltip{
+            text = "Toggle roll interception on/off",
+            valign = "top",
+        },
+
+        click = function(panel)
+            if not DiceVision.connected then
+                return
+            end
+
+            local newMode
+            if DiceVision.mode == "replace" then
+                newMode = "off"
+            else
+                newMode = "replace"
+            end
+
+            local oldMode = DiceVision.mode
+            DiceVision.setMode(newMode)
+            chat.Send("[DiceVision] Mode changed: " .. oldMode .. " -> " .. newMode)
+            updateState()
+        end,
+
+        gui.Panel{
+            interactable = false,
+            width = "100%",
+            height = "100%",
+            halign = "center",
+            valign = "center",
+            toggleLabel,
+        },
+    }
+
     local resultPanel = gui.Panel{
         width = "100%",
         height = "100%",
@@ -218,13 +328,29 @@ CreateDiceVisionPanel = function()
         end,
 
         gui.Panel{
+            flow = "vertical",
             width = "100%",
             height = "100%",
-            halign = "center",
-            valign = "center",
-            diceButton,
-            statusShadow,
-            statusLabel,
+
+            -- Row 1: dice button + status labels
+            gui.Panel{
+                width = "100%",
+                height = 68,
+                halign = "center",
+                valign = "center",
+                diceButton,
+                statusShadow,
+                statusLabel,
+            },
+
+            -- Row 2: toggle button
+            gui.Panel{
+                width = "100%",
+                height = 28,
+                halign = "center",
+                valign = "center",
+                toggleButton,
+            },
         },
     }
 
