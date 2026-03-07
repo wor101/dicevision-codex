@@ -99,6 +99,7 @@ Pure roll utility and dice rule processing functions, extracted from DiceVision.
 | `detectDiceSelection(pendingRoll)` | Auto-detect numKeep from roll context |
 | `getEffectiveRules(pendingRoll)` | Merge manual rules with auto-detection |
 | `applyDiceRules(dice, pendingRoll)` | Main entry point - applies all rules |
+| `detectPercentilePair(dice)` | Detect d100 pair from raw string values |
 
 ### `DiceVision_5554/DiceVision.lua`
 
@@ -360,6 +361,35 @@ DiceVision's replace mode requires only the DiceVision mod files installed in Co
 | 1 | **DiceVision mod files** | `DiceVision_5554/` folder with `DiceVision.lua`, `DiceRollLogic.lua`, `DVDicePanel.lua`, and `Main.lua` in the Codex mods directory |
 
 No core Codex file modifications are needed. The `RollDialog.OnBeforeRoll` callback is built into the official DSRollDialog.lua. See the [official Codex repo](https://github.com/VerisimLLC/draw-steel-codex) for the source.
+
+---
+
+## Percentile (d100) Detection
+
+DiceVision can detect percentile (d100) rolls when the API sends die values as **strings**. This preserves the distinction between `"0"` (standard d10 zero face) and `"00"` (percentile tens-die zero face).
+
+### How It Works
+
+1. **String preservation**: `handleDiceVisionRoll` saves each die's original string as `die.rawValue` before converting `die.value` to an integer.
+2. **Detection**: `DiceRollLogic.detectPercentilePair(dice)` examines `rawValue` strings on exactly 2 d10 dice:
+   - **Tens die**: `rawValue` is `"00"` or a two-digit multiple of 10 (`"10"`, `"20"`, ... `"90"`)
+   - **Units die**: `rawValue` is a single digit (`"0"` through `"9"`)
+3. **Total calculation**: `tens.value + units.value`, with the special case that `0 + 0 = 100` (standard d100 convention).
+4. **Bypass**: Percentile rolls skip `applyDiceRules` entirely — no 0→10 mapping, no clamping, no dice selection.
+
+### Dependency
+
+This feature requires the DiceVision API router to send die values as **strings** rather than integers. If the router converts to integers before sending, all values arrive as numbers and percentile detection cannot distinguish `"00"` from `"0"`.
+
+### Key Cases
+
+| Tens rawValue | Units rawValue | Total | Notes |
+|---------------|----------------|-------|-------|
+| `"30"` | `"7"` | 37 | Standard percentile |
+| `"00"` | `"7"` | 7 | Detected via "00" string |
+| `"00"` | `"0"` | **100** | 0+0 → 100 convention |
+| `"10"` | `"0"` | 10 | |
+| Two `"0"` values | | Standard 2d10 | No tens die detected; 0→10 mapping applies |
 
 ---
 

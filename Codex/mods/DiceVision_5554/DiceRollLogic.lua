@@ -225,4 +225,60 @@ function DiceRollLogic.applyDiceRules(dice, pendingRoll)
     return processed, droppedDice
 end
 
+-- ============================================================================
+-- Percentile (d100) Detection
+-- ============================================================================
+
+--- Detect a percentile (d100) pair from raw string die values.
+-- Requires exactly 2 d10 dice. A "tens" die has rawValue "00" or a two-digit
+-- multiple of 10 ("10".."90"). A "units" die has a single-digit rawValue ("0".."9").
+-- Returns { tens = die, units = die, total = number } or nil.
+-- Special case: total of 0 ("00" + "0") maps to 100.
+function DiceRollLogic.detectPercentilePair(dice)
+    if not dice or #dice ~= 2 then
+        return nil
+    end
+
+    -- Both must be d10
+    if dice[1].type ~= "d10" or dice[2].type ~= "d10" then
+        return nil
+    end
+
+    -- Valid percentile tens faces: "00", "10", "20", ... "90"
+    local function isTensDie(die)
+        local raw = tostring(die.rawValue)
+        if raw == "00" then return true end
+        local num = tonumber(raw)
+        if num and num >= 10 and num <= 90 and num % 10 == 0 then
+            return true
+        end
+        return false
+    end
+
+    -- Valid units faces: single digit "0" through "9"
+    local function isUnitsDie(die)
+        local raw = tostring(die.rawValue)
+        return raw:match("^%d$") ~= nil
+    end
+
+    local tens, units
+
+    if isTensDie(dice[1]) and isUnitsDie(dice[2]) then
+        tens = dice[1]
+        units = dice[2]
+    elseif isTensDie(dice[2]) and isUnitsDie(dice[1]) then
+        tens = dice[2]
+        units = dice[1]
+    else
+        return nil
+    end
+
+    local total = tens.value + units.value
+    if total == 0 then
+        total = 100
+    end
+
+    return { tens = tens, units = units, total = total }
+end
+
 print("DV: DiceRollLogic loaded")
