@@ -77,7 +77,12 @@ DiceVision.generateRequestId = generateRequestId
 local function formatDice(dice)
     local parts = {}
     for _, die in ipairs(dice) do
-        table.insert(parts, string.format("%s:%d", die.type, die.value))
+        local raw = die.rawValue
+        if raw ~= nil and tostring(raw) ~= tostring(die.value) then
+            table.insert(parts, string.format("%s:'%s'->%s", die.type, tostring(raw), tostring(die.value)))
+        else
+            table.insert(parts, string.format("%s:%s", die.type, tostring(die.value)))
+        end
     end
     return table.concat(parts, ", ")
 end
@@ -100,6 +105,7 @@ DiceVisionRollMessage.total = 0
 DiceVisionRollMessage.tier = 1
 DiceVisionRollMessage.tokenid = nil
 DiceVisionRollMessage.rollSource = "unknown"  -- "panel" | "ability"
+DiceVisionRollMessage.isPercentile = false
 
 function DiceVisionRollMessage.CreateDiePanel(faces, value)
     local diceStyle = dmhub.GetDiceStyling(
@@ -162,6 +168,7 @@ function DiceVisionRollMessage.Render(self, message)
     local tier = self:try_get("tier") or 1
     local description = self:try_get("description") or "Roll"
     local rollSource = self:try_get("rollSource") or "unknown"
+    local isPercentile = self:try_get("isPercentile") or false
 
     -- Token panel only for panel rolls
     local tokenPanel = nil
@@ -225,6 +232,21 @@ function DiceVisionRollMessage.Render(self, message)
         dicePanels[#dicePanels+1] = DiceVisionRollMessage.CreateDiePanel(faces, value)
     end
 
+    if isPercentile then
+        dicePanels[#dicePanels+1] = gui.Label{
+            width = "auto",
+            height = 40,
+            halign = "center",
+            valign = "center",
+            textAlignment = "center",
+            fontSize = 16,
+            bold = true,
+            color = "#aaaaaa",
+            text = "d100",
+            lmargin = 6,
+        }
+    end
+
     if modifier ~= 0 then
         local modSign = modifier > 0 and "+" or ""
         dicePanels[#dicePanels+1] = gui.Label{
@@ -253,7 +275,7 @@ function DiceVisionRollMessage.Render(self, message)
     end
 
     local totalLabel = gui.Label{
-        width = 60,
+        width = 80,
         height = 50,
         halign = "right",
         valign = "center",
@@ -264,15 +286,18 @@ function DiceVisionRollMessage.Render(self, message)
         text = tostring(total),
     }
 
-    local tierRangeLabel = DiceVisionRollMessage.GetTierLabel(tier)
-    local tierLabel = gui.Label{
-        width = "100%",
-        height = "auto",
-        fontSize = 14,
-        color = "#888888",
-        tmargin = 4,
-        text = string.format("%s    tier %d result", tierRangeLabel, tier),
-    }
+    local tierLabel = nil
+    if rollSource ~= "panel" then
+        local tierRangeLabel = DiceVisionRollMessage.GetTierLabel(tier)
+        tierLabel = gui.Label{
+            width = "100%",
+            height = "auto",
+            fontSize = 14,
+            color = "#888888",
+            tmargin = 4,
+            text = string.format("%s    tier %d result", tierRangeLabel, tier),
+        }
+    end
 
     return gui.Panel{
         width = "100%",
@@ -367,6 +392,17 @@ local function handleSessionExpired()
 end
 
 local function handleDiceVisionRoll(rollData)
+    -- Build new dice tables from API response (net.Get tables don't support assignment)
+    local convertedDice = {}
+    for i, die in ipairs(rollData.dice) do
+        convertedDice[i] = {
+            type = die.type,
+            rawValue = die.value,  -- Preserve original string (e.g., "00", "30", "7")
+            value = tonumber(die.value) or 0,
+        }
+    end
+    rollData = { dice = convertedDice, total = rollData.total }
+
     print(string.format("DV: handleDiceVisionRoll - panelWaiting=%s, mode=%s, waitingForRoll=%s, dice=%s",
         tostring(DiceVision.panelWaitingForRoll), DiceVision.mode, tostring(DiceVision.waitingForRoll),
         formatDice(rollData.dice)))
@@ -480,6 +516,33 @@ end
 -- ============================================================================
 
 postRollToChat = function(rollData)
+    -- Check for percentile (d100) pair before applying standard rules
+    local percentile = DiceRollLogic.detectPercentilePair(rollData.dice)
+    if percentile then
+        local diceForMessage = {
+            { faces = 10, value = tostring(percentile.tens.rawValue) },   -- "00" shows as "00"
+            { faces = 10, value = tostring(percentile.units.rawValue) },  -- "7" shows as "7"
+        }
+        local total = percentile.total
+        local tier = DiceRollLogic.calculateTier(total)
+        local message = DiceVisionRollMessage.new{
+            description = "Percentile Roll (d100)",
+            dice = diceForMessage,
+            modifier = 0,
+            total = total,
+            tier = tier,
+            tokenid = DiceVision.panelTokenId,
+            rollSource = "panel",
+            isPercentile = true,
+        }
+        chat.SendCustom(message)
+        DiceVision.panelTokenId = nil
+        print(string.format("DV: postRollToChat - d100 detected, tens=%s units=%s total=%d tier=%d",
+            tostring(percentile.tens.rawValue), tostring(percentile.units.rawValue), total, tier))
+        return
+    end
+
+    -- Standard path: apply dice rules (including 0->10 mapping for standard d10s)
     local processedDice, droppedDice = DiceRollLogic.applyDiceRules(rollData.dice, nil)
     local diceForMessage = {}
     local diceSum = 0
