@@ -109,11 +109,14 @@ DiceVisionRollMessage.tokenid = nil
 DiceVisionRollMessage.rollSource = "unknown"  -- "panel" | "ability"
 DiceVisionRollMessage.isPercentile = false
 
-function DiceVisionRollMessage.CreateDiePanel(faces, value)
+function DiceVisionRollMessage.CreateDiePanel(faces, value, dropped)
     local diceStyle = dmhub.GetDiceStyling(
         dmhub.GetSettingValue("diceequipped"),
         dmhub.GetSettingValue("playercolor")
     )
+    local sat = dropped and 0.3 or 0.7
+    local bright = dropped and 0.2 or 0.4
+    local labelColor = dropped and "#888888" or (diceStyle.color or "#ffffff")
     return gui.Panel{
         width = 40,
         height = 40,
@@ -121,8 +124,8 @@ function DiceVisionRollMessage.CreateDiePanel(faces, value)
         valign = "center",
         bgimage = string.format("ui-icons/d%d-filled.png", faces),
         bgcolor = diceStyle.bgcolor or "#2d5a2d",
-        saturation = 0.7,
-        brightness = 0.4,
+        saturation = sat,
+        brightness = bright,
         gui.Panel{
             interactable = false,
             width = "100%",
@@ -138,7 +141,7 @@ function DiceVisionRollMessage.CreateDiePanel(faces, value)
                 textAlignment = "center",
                 fontSize = 16,
                 bold = true,
-                color = diceStyle.color or "#ffffff",
+                color = labelColor,
                 text = tostring(value),
             },
         },
@@ -231,7 +234,8 @@ function DiceVisionRollMessage.Render(self, message)
     for _, die in ipairs(dice) do
         local faces = die.faces or 10
         local value = die.value or 0
-        dicePanels[#dicePanels+1] = DiceVisionRollMessage.CreateDiePanel(faces, value)
+        local dropped = die.dropped or false
+        dicePanels[#dicePanels+1] = DiceVisionRollMessage.CreateDiePanel(faces, value, dropped)
     end
 
     if isPercentile then
@@ -560,6 +564,13 @@ postRollToChat = function(rollData)
     if droppedDice and #droppedDice > 0 then
         local droppedValues = {}
         for _, die in ipairs(droppedDice) do
+            local faces = DiceRollLogic.getDiceFaces(die.type)
+            diceForMessage[#diceForMessage + 1] = {
+                faces = faces,
+                value = die.value,
+                originalValue = die.originalValue,
+                dropped = true,
+            }
             droppedValues[#droppedValues + 1] = tostring(die.value)
         end
         print("[DiceVision] Dropped dice: " .. table.concat(droppedValues, ", "))
@@ -654,6 +665,13 @@ handlePendingRoll = function(rollData)
     if droppedDice and #droppedDice > 0 then
         local droppedValues = {}
         for _, die in ipairs(droppedDice) do
+            local faces = DiceRollLogic.getDiceFaces(die.type)
+            diceForMessage[#diceForMessage + 1] = {
+                faces = faces,
+                value = die.value,
+                originalValue = die.originalValue,
+                dropped = true,
+            }
             droppedValues[#droppedValues + 1] = tostring(die.value)
         end
         print("[DiceVision] Dropped dice: " .. table.concat(droppedValues, ", "))
