@@ -18,6 +18,9 @@ dmhub = {
     ParseRoll = function(rollStr, creature)
         return nil
     end,
+    GetRollAdvantage = function(rollStr)
+        return "normal"
+    end,
 }
 
 -- Capture print calls for testing output without polluting test results
@@ -53,6 +56,9 @@ _G.resetStubs = function()
     }
     dmhub.ParseRoll = function(rollStr, creature)
         return nil
+    end
+    dmhub.GetRollAdvantage = function(rollStr)
+        return "normal"
     end
 end
 

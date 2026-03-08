@@ -606,6 +606,106 @@ describe("detectDiceSelection", function()
         DiceRollLogic.detectDiceSelection(pendingRoll)
         assert.are.equal("test_creature", capturedCreature)
     end)
+
+    it("returns keep = 'lowest' for disadvantage rolls", function()
+        dmhub.ParseRoll = function()
+            return {
+                categories = {
+                    main = {
+                        groups = {
+                            {numKeep = 2, numDice = 3},
+                        },
+                    },
+                },
+            }
+        end
+        dmhub.GetRollAdvantage = function() return "disadvantage" end
+        local pendingRoll = {originalRoll = "3d10k2"}
+        local result = DiceRollLogic.detectDiceSelection(pendingRoll)
+        assert.is_not_nil(result)
+        assert.are.equal("lowest", result.keep)
+        assert.are.equal(2, result.count)
+        assert.are.equal(3, result.total)
+    end)
+
+    it("returns keep = 'highest' for advantage rolls", function()
+        dmhub.ParseRoll = function()
+            return {
+                categories = {
+                    main = {
+                        groups = {
+                            {numKeep = 2, numDice = 3},
+                        },
+                    },
+                },
+            }
+        end
+        dmhub.GetRollAdvantage = function() return "advantage" end
+        local pendingRoll = {originalRoll = "3d10k2"}
+        local result = DiceRollLogic.detectDiceSelection(pendingRoll)
+        assert.is_not_nil(result)
+        assert.are.equal("highest", result.keep)
+    end)
+
+    it("defaults to keep = 'highest' for normal rolls", function()
+        dmhub.ParseRoll = function()
+            return {
+                categories = {
+                    main = {
+                        groups = {
+                            {numKeep = 2, numDice = 3},
+                        },
+                    },
+                },
+            }
+        end
+        dmhub.GetRollAdvantage = function() return "normal" end
+        local pendingRoll = {originalRoll = "3d10k2"}
+        local result = DiceRollLogic.detectDiceSelection(pendingRoll)
+        assert.is_not_nil(result)
+        assert.are.equal("highest", result.keep)
+    end)
+
+    it("falls back to keep = 'highest' when GetRollAdvantage is nil", function()
+        dmhub.ParseRoll = function()
+            return {
+                categories = {
+                    main = {
+                        groups = {
+                            {numKeep = 2, numDice = 3},
+                        },
+                    },
+                },
+            }
+        end
+        dmhub.GetRollAdvantage = nil
+        local pendingRoll = {originalRoll = "3d10k2"}
+        local result = DiceRollLogic.detectDiceSelection(pendingRoll)
+        assert.is_not_nil(result)
+        assert.are.equal("highest", result.keep)
+    end)
+
+    it("passes originalRoll to GetRollAdvantage", function()
+        local capturedRollStr = nil
+        dmhub.ParseRoll = function()
+            return {
+                categories = {
+                    main = {
+                        groups = {
+                            {numKeep = 2, numDice = 3},
+                        },
+                    },
+                },
+            }
+        end
+        dmhub.GetRollAdvantage = function(rollStr)
+            capturedRollStr = rollStr
+            return "normal"
+        end
+        local pendingRoll = {originalRoll = "3d10k2 with disadvantage"}
+        DiceRollLogic.detectDiceSelection(pendingRoll)
+        assert.are.equal("3d10k2 with disadvantage", capturedRollStr)
+    end)
 end)
 
 describe("getEffectiveRules", function()
@@ -660,6 +760,27 @@ describe("getEffectiveRules", function()
         local rules = DiceRollLogic.getEffectiveRules(nil)
         assert.is_not_nil(rules.valueMappings)
         assert.is_nil(next(rules.valueMappings))
+    end)
+
+    it("auto-detects keep lowest for disadvantage rolls", function()
+        DiceVision.rules.diceSelection = nil
+        dmhub.ParseRoll = function()
+            return {
+                categories = {
+                    main = {
+                        groups = {
+                            {numKeep = 2, numDice = 3},
+                        },
+                    },
+                },
+            }
+        end
+        dmhub.GetRollAdvantage = function() return "disadvantage" end
+        local pendingRoll = {originalRoll = "3d10k2"}
+        local rules = DiceRollLogic.getEffectiveRules(pendingRoll)
+        assert.is_not_nil(rules.diceSelection)
+        assert.are.equal("lowest", rules.diceSelection.keep)
+        assert.are.equal(2, rules.diceSelection.count)
     end)
 end)
 

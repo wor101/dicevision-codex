@@ -180,8 +180,15 @@ function DiceRollLogic.detectDiceSelection(pendingRoll)
             if category.groups then
                 for _, group in ipairs(category.groups) do
                     if group.numKeep and group.numKeep > 0 and group.numDice and group.numDice > group.numKeep then
+                        local keepDirection = "highest"
+                        if dmhub.GetRollAdvantage then
+                            local advState = dmhub.GetRollAdvantage(pendingRoll.originalRoll)
+                            if advState == "disadvantage" then
+                                keepDirection = "lowest"
+                            end
+                        end
                         return {
-                            keep = "highest",
+                            keep = keepDirection,
                             count = group.numKeep,
                             total = group.numDice,
                         }
