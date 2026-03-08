@@ -685,6 +685,87 @@ describe("detectDiceSelection", function()
         assert.are.equal("highest", result.keep)
     end)
 
+    it("returns keep = 'lowest' when roll string contains 'keep low'", function()
+        dmhub.ParseRoll = function()
+            return {
+                categories = {
+                    main = {
+                        groups = {
+                            {numKeep = 2, numDice = 3},
+                        },
+                    },
+                },
+            }
+        end
+        dmhub.GetRollAdvantage = function() return "normal" end
+        local pendingRoll = {originalRoll = "3d10+2 keep low 2"}
+        local result = DiceRollLogic.detectDiceSelection(pendingRoll)
+        assert.is_not_nil(result)
+        assert.are.equal("lowest", result.keep)
+        assert.are.equal(2, result.count)
+        assert.are.equal(3, result.total)
+    end)
+
+    it("returns keep = 'highest' when roll string has 'keep' without 'low'", function()
+        dmhub.ParseRoll = function()
+            return {
+                categories = {
+                    main = {
+                        groups = {
+                            {numKeep = 2, numDice = 3},
+                        },
+                    },
+                },
+            }
+        end
+        dmhub.GetRollAdvantage = function() return "normal" end
+        local pendingRoll = {originalRoll = "3d10+1 keep 2"}
+        local result = DiceRollLogic.detectDiceSelection(pendingRoll)
+        assert.is_not_nil(result)
+        assert.are.equal("highest", result.keep)
+    end)
+
+    it("'keep low' in roll string takes priority over GetRollAdvantage", function()
+        dmhub.ParseRoll = function()
+            return {
+                categories = {
+                    main = {
+                        groups = {
+                            {numKeep = 2, numDice = 3},
+                        },
+                    },
+                },
+            }
+        end
+        -- GetRollAdvantage returns "normal" but roll string says "keep low"
+        dmhub.GetRollAdvantage = function() return "normal" end
+        local pendingRoll = {originalRoll = "3d10+2 keep low 2"}
+        local result = DiceRollLogic.detectDiceSelection(pendingRoll)
+        assert.are.equal("lowest", result.keep)
+    end)
+
+    it("does not call GetRollAdvantage when roll string contains 'keep low'", function()
+        dmhub.ParseRoll = function()
+            return {
+                categories = {
+                    main = {
+                        groups = {
+                            {numKeep = 2, numDice = 3},
+                        },
+                    },
+                },
+            }
+        end
+        local advCalled = false
+        dmhub.GetRollAdvantage = function()
+            advCalled = true
+            return "normal"
+        end
+        local pendingRoll = {originalRoll = "3d10+2 keep low 2"}
+        DiceRollLogic.detectDiceSelection(pendingRoll)
+        assert.is_false(advCalled)
+    end)
+
     it("passes originalRoll to GetRollAdvantage", function()
         local capturedRollStr = nil
         dmhub.ParseRoll = function()
@@ -760,6 +841,27 @@ describe("getEffectiveRules", function()
         local rules = DiceRollLogic.getEffectiveRules(nil)
         assert.is_not_nil(rules.valueMappings)
         assert.is_nil(next(rules.valueMappings))
+    end)
+
+    it("auto-detects keep lowest from 'keep low' roll string", function()
+        DiceVision.rules.diceSelection = nil
+        dmhub.ParseRoll = function()
+            return {
+                categories = {
+                    main = {
+                        groups = {
+                            {numKeep = 2, numDice = 3},
+                        },
+                    },
+                },
+            }
+        end
+        dmhub.GetRollAdvantage = function() return "normal" end
+        local pendingRoll = {originalRoll = "3d10+2 keep low 2"}
+        local rules = DiceRollLogic.getEffectiveRules(pendingRoll)
+        assert.is_not_nil(rules.diceSelection)
+        assert.are.equal("lowest", rules.diceSelection.keep)
+        assert.are.equal(2, rules.diceSelection.count)
     end)
 
     it("auto-detects keep lowest for disadvantage rolls", function()
