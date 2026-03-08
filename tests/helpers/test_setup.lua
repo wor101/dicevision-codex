@@ -22,7 +22,7 @@ dmhub = {
 
 -- Capture print calls for testing output without polluting test results
 _G._printLog = {}
-local _originalPrint = print
+local _originalPrint = print -- luacheck: ignore (kept for potential future restore)
 _G.print = function(...)
     local args = {...}
     local parts = {}

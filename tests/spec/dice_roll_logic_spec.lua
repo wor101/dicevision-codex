@@ -483,7 +483,7 @@ describe("applyDiceSelection", function()
             {type = "d10", value = 5},
         }
         local selection = {keep = "highest", count = 2}
-        local result, sorted = DiceRollLogic.applyDiceSelection(dice, selection)
+        local _, sorted = DiceRollLogic.applyDiceSelection(dice, selection)
         assert.is_not_nil(sorted)
         assert.are.equal(3, #sorted)
         -- sorted should be descending by value for "highest"

@@ -4,7 +4,7 @@
     Requires DiceVision.lua to be loaded first.
 ]]
 
-local mod = dmhub.GetModLoading()
+local _ = dmhub.GetModLoading() -- luacheck: ignore
 
 -- ============================================================================
 -- Panel Registration

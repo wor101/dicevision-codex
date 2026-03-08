@@ -176,7 +176,7 @@ function DiceRollLogic.detectDiceSelection(pendingRoll)
     local creature = pendingRoll.rollArgs and pendingRoll.rollArgs.creature
     local rollInfo = dmhub.ParseRoll(pendingRoll.originalRoll, creature)
     if rollInfo and rollInfo.categories then
-        for catName, category in pairs(rollInfo.categories) do
+        for _, category in pairs(rollInfo.categories) do
             if category.groups then
                 for _, group in ipairs(category.groups) do
                     if group.numKeep and group.numKeep > 0 and group.numDice and group.numDice > group.numKeep then
