@@ -521,6 +521,10 @@ describe("detectDiceSelection", function()
         resetStubs()
     end)
 
+    -- ----------------------------------------------------------------
+    -- Nil / missing input
+    -- ----------------------------------------------------------------
+
     it("returns nil for nil input", function()
         assert.is_nil(DiceRollLogic.detectDiceSelection(nil))
     end)
@@ -529,19 +533,77 @@ describe("detectDiceSelection", function()
         assert.is_nil(DiceRollLogic.detectDiceSelection({}))
     end)
 
-    it("returns nil when ParseRoll returns nil", function()
+    -- ----------------------------------------------------------------
+    -- Method 1: Roll string parsing ("keep [low|high] N")
+    -- ----------------------------------------------------------------
+
+    it("parses 'keep low N' from roll string when ParseRoll returns nil", function()
         dmhub.ParseRoll = function() return nil end
-        local pendingRoll = {originalRoll = "2d10"}
+        local pendingRoll = {originalRoll = "3d10+2 keep low 2"}
+        local result = DiceRollLogic.detectDiceSelection(pendingRoll)
+        assert.is_not_nil(result)
+        assert.are.equal("lowest", result.keep)
+        assert.are.equal(2, result.count)
+        assert.are.equal(3, result.total)
+    end)
+
+    it("parses 'keep N' from roll string when ParseRoll returns nil", function()
+        dmhub.ParseRoll = function() return nil end
+        local pendingRoll = {originalRoll = "3d10+1 keep 2"}
+        local result = DiceRollLogic.detectDiceSelection(pendingRoll)
+        assert.is_not_nil(result)
+        assert.are.equal("highest", result.keep)
+        assert.are.equal(2, result.count)
+        assert.are.equal(3, result.total)
+    end)
+
+    it("parses 'keep high N' from roll string as highest", function()
+        dmhub.ParseRoll = function() return nil end
+        local pendingRoll = {originalRoll = "3d10 keep high 2"}
+        local result = DiceRollLogic.detectDiceSelection(pendingRoll)
+        assert.is_not_nil(result)
+        assert.are.equal("highest", result.keep)
+        assert.are.equal(2, result.count)
+        assert.are.equal(3, result.total)
+    end)
+
+    it("'keep low' in roll string takes priority over GetRollAdvantage 'normal'", function()
+        dmhub.ParseRoll = function() return nil end
+        dmhub.GetRollAdvantage = function() return "normal" end
+        local pendingRoll = {originalRoll = "3d10+2 keep low 2"}
+        local result = DiceRollLogic.detectDiceSelection(pendingRoll)
+        assert.are.equal("lowest", result.keep)
+    end)
+
+    it("returns nil when keepCount >= numDice from roll string", function()
+        dmhub.ParseRoll = function() return nil end
+        local pendingRoll = {originalRoll = "2d10 keep 2"}
         assert.is_nil(DiceRollLogic.detectDiceSelection(pendingRoll))
     end)
 
-    it("returns nil when no categories in rollInfo", function()
-        dmhub.ParseRoll = function() return {} end
-        local pendingRoll = {originalRoll = "2d10"}
+    it("returns nil when keepCount > numDice from roll string", function()
+        dmhub.ParseRoll = function() return nil end
+        local pendingRoll = {originalRoll = "2d10 keep 3"}
         assert.is_nil(DiceRollLogic.detectDiceSelection(pendingRoll))
     end)
 
-    it("returns selection when numKeep < numDice", function()
+    it("does not call GetRollAdvantage when roll string contains 'keep low'", function()
+        dmhub.ParseRoll = function() return nil end
+        local advCalled = false
+        dmhub.GetRollAdvantage = function()
+            advCalled = true
+            return "normal"
+        end
+        local pendingRoll = {originalRoll = "3d10+2 keep low 2"}
+        DiceRollLogic.detectDiceSelection(pendingRoll)
+        assert.is_false(advCalled)
+    end)
+
+    -- ----------------------------------------------------------------
+    -- Method 2: ParseRoll fallback (no "keep" keyword in string)
+    -- ----------------------------------------------------------------
+
+    it("falls back to ParseRoll when no 'keep' in roll string", function()
         dmhub.ParseRoll = function()
             return {
                 categories = {
@@ -561,7 +623,19 @@ describe("detectDiceSelection", function()
         assert.are.equal(3, result.total)
     end)
 
-    it("returns nil when numKeep equals numDice", function()
+    it("returns nil when ParseRoll returns nil and no keep in string", function()
+        dmhub.ParseRoll = function() return nil end
+        local pendingRoll = {originalRoll = "2d10"}
+        assert.is_nil(DiceRollLogic.detectDiceSelection(pendingRoll))
+    end)
+
+    it("returns nil when no categories in rollInfo", function()
+        dmhub.ParseRoll = function() return {} end
+        local pendingRoll = {originalRoll = "2d10"}
+        assert.is_nil(DiceRollLogic.detectDiceSelection(pendingRoll))
+    end)
+
+    it("returns nil when numKeep equals numDice via ParseRoll", function()
         dmhub.ParseRoll = function()
             return {
                 categories = {
@@ -577,7 +651,7 @@ describe("detectDiceSelection", function()
         assert.is_nil(DiceRollLogic.detectDiceSelection(pendingRoll))
     end)
 
-    it("returns nil when numKeep is 0", function()
+    it("returns nil when numKeep is 0 via ParseRoll", function()
         dmhub.ParseRoll = function()
             return {
                 categories = {
@@ -607,7 +681,11 @@ describe("detectDiceSelection", function()
         assert.are.equal("test_creature", capturedCreature)
     end)
 
-    it("returns keep = 'lowest' for disadvantage rolls", function()
+    -- ----------------------------------------------------------------
+    -- Keep direction via GetRollAdvantage (ParseRoll fallback path)
+    -- ----------------------------------------------------------------
+
+    it("returns keep = 'lowest' for disadvantage via ParseRoll fallback", function()
         dmhub.ParseRoll = function()
             return {
                 categories = {
@@ -685,7 +763,44 @@ describe("detectDiceSelection", function()
         assert.are.equal("highest", result.keep)
     end)
 
-    it("returns keep = 'lowest' when roll string contains 'keep low'", function()
+    it("passes originalRoll to GetRollAdvantage", function()
+        local capturedRollStr = nil
+        dmhub.ParseRoll = function()
+            return {
+                categories = {
+                    main = {
+                        groups = {
+                            {numKeep = 2, numDice = 3},
+                        },
+                    },
+                },
+            }
+        end
+        dmhub.GetRollAdvantage = function(rollStr)
+            capturedRollStr = rollStr
+            return "normal"
+        end
+        local pendingRoll = {originalRoll = "3d10k2 with disadvantage"}
+        DiceRollLogic.detectDiceSelection(pendingRoll)
+        assert.are.equal("3d10k2 with disadvantage", capturedRollStr)
+    end)
+
+    -- ----------------------------------------------------------------
+    -- Roll string parsing + ParseRoll interaction
+    -- ----------------------------------------------------------------
+
+    it("skips ParseRoll when roll string has 'keep' keyword", function()
+        local parseRollCalled = false
+        dmhub.ParseRoll = function()
+            parseRollCalled = true
+            return nil
+        end
+        local pendingRoll = {originalRoll = "3d10+1 keep 2"}
+        DiceRollLogic.detectDiceSelection(pendingRoll)
+        assert.is_false(parseRollCalled)
+    end)
+
+    it("returns keep = 'lowest' when roll string has 'keep low' and ParseRoll has data", function()
         dmhub.ParseRoll = function()
             return {
                 categories = {
@@ -723,69 +838,6 @@ describe("detectDiceSelection", function()
         local result = DiceRollLogic.detectDiceSelection(pendingRoll)
         assert.is_not_nil(result)
         assert.are.equal("highest", result.keep)
-    end)
-
-    it("'keep low' in roll string takes priority over GetRollAdvantage", function()
-        dmhub.ParseRoll = function()
-            return {
-                categories = {
-                    main = {
-                        groups = {
-                            {numKeep = 2, numDice = 3},
-                        },
-                    },
-                },
-            }
-        end
-        -- GetRollAdvantage returns "normal" but roll string says "keep low"
-        dmhub.GetRollAdvantage = function() return "normal" end
-        local pendingRoll = {originalRoll = "3d10+2 keep low 2"}
-        local result = DiceRollLogic.detectDiceSelection(pendingRoll)
-        assert.are.equal("lowest", result.keep)
-    end)
-
-    it("does not call GetRollAdvantage when roll string contains 'keep low'", function()
-        dmhub.ParseRoll = function()
-            return {
-                categories = {
-                    main = {
-                        groups = {
-                            {numKeep = 2, numDice = 3},
-                        },
-                    },
-                },
-            }
-        end
-        local advCalled = false
-        dmhub.GetRollAdvantage = function()
-            advCalled = true
-            return "normal"
-        end
-        local pendingRoll = {originalRoll = "3d10+2 keep low 2"}
-        DiceRollLogic.detectDiceSelection(pendingRoll)
-        assert.is_false(advCalled)
-    end)
-
-    it("passes originalRoll to GetRollAdvantage", function()
-        local capturedRollStr = nil
-        dmhub.ParseRoll = function()
-            return {
-                categories = {
-                    main = {
-                        groups = {
-                            {numKeep = 2, numDice = 3},
-                        },
-                    },
-                },
-            }
-        end
-        dmhub.GetRollAdvantage = function(rollStr)
-            capturedRollStr = rollStr
-            return "normal"
-        end
-        local pendingRoll = {originalRoll = "3d10k2 with disadvantage"}
-        DiceRollLogic.detectDiceSelection(pendingRoll)
-        assert.are.equal("3d10k2 with disadvantage", capturedRollStr)
     end)
 end)
 
@@ -843,25 +895,16 @@ describe("getEffectiveRules", function()
         assert.is_nil(next(rules.valueMappings))
     end)
 
-    it("auto-detects keep lowest from 'keep low' roll string", function()
+    it("auto-detects keep lowest from 'keep low' roll string (ParseRoll returns nil)", function()
         DiceVision.rules.diceSelection = nil
-        dmhub.ParseRoll = function()
-            return {
-                categories = {
-                    main = {
-                        groups = {
-                            {numKeep = 2, numDice = 3},
-                        },
-                    },
-                },
-            }
-        end
+        dmhub.ParseRoll = function() return nil end
         dmhub.GetRollAdvantage = function() return "normal" end
         local pendingRoll = {originalRoll = "3d10+2 keep low 2"}
         local rules = DiceRollLogic.getEffectiveRules(pendingRoll)
         assert.is_not_nil(rules.diceSelection)
         assert.are.equal("lowest", rules.diceSelection.keep)
         assert.are.equal(2, rules.diceSelection.count)
+        assert.are.equal(3, rules.diceSelection.total)
     end)
 
     it("auto-detects keep lowest for disadvantage rolls", function()
