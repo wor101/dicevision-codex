@@ -489,4 +489,260 @@ describe("DiceVision", function()
             assert.truthy(string.find(_G._chatLog[2].message, "Current mode"))
         end)
     end)
+
+    -- ============================================================================
+    -- Category 4: Re-roll Functionality
+    -- ============================================================================
+
+    describe("onBeforeRoll saves lastInterceptedContext", function()
+        it("stores originalRoll, description, edges, banes, multitargets", function()
+            DiceVision.connected = true
+            DiceVision.setMode("replace")
+
+            local rollArgs = {
+                roll = "2d10+3",
+                description = "Power Roll",
+                complete = nil,
+                instant = false,
+            }
+
+            RollDialog.OnBeforeRoll({
+                rollArgs = rollArgs,
+                roll = "2d10+3",
+                description = "Power Roll",
+                boons = 0,
+                multitargets = nil,
+            })
+
+            local saved = DiceVision.lastInterceptedContext
+            assert.is_not_nil(saved)
+            assert.are.equal("2d10+3", saved.originalRoll)
+            assert.are.equal("Power Roll", saved.description)
+            assert.are.equal(0, saved.edges)
+            assert.are.equal(0, saved.banes)
+        end)
+
+        it("stores originalComplete and originalInstant from rollArgs", function()
+            DiceVision.connected = true
+            DiceVision.setMode("replace")
+
+            local completeFn = function() end
+            local rollArgs = {
+                roll = "2d10",
+                description = "Test",
+                complete = completeFn,
+                instant = true,
+            }
+
+            RollDialog.OnBeforeRoll({
+                rollArgs = rollArgs,
+                roll = "2d10",
+                description = "Test",
+                boons = 0,
+                multitargets = nil,
+            })
+
+            local saved = DiceVision.lastInterceptedContext
+            assert.are.equal(completeFn, saved.originalComplete)
+            assert.are.equal(true, saved.originalInstant)
+        end)
+
+        it("stores edges and banes from boons context", function()
+            DiceVision.connected = true
+            DiceVision.setMode("replace")
+
+            local rollArgs = {
+                roll = "2d10",
+                description = "Test",
+                complete = nil,
+                instant = false,
+            }
+
+            RollDialog.OnBeforeRoll({
+                rollArgs = rollArgs,
+                roll = "2d10",
+                description = "Test",
+                boons = 1,  -- 1 edge
+                multitargets = nil,
+            })
+
+            local saved = DiceVision.lastInterceptedContext
+            assert.are.equal(1, saved.edges)
+            assert.are.equal(0, saved.banes)
+        end)
+
+        it("stores multitargets when present", function()
+            DiceVision.connected = true
+            DiceVision.setMode("replace")
+
+            local targets = {{boons = 0, banes = 0}}
+            local rollArgs = {
+                roll = "2d10",
+                description = "Test",
+                complete = nil,
+                instant = false,
+            }
+
+            RollDialog.OnBeforeRoll({
+                rollArgs = rollArgs,
+                roll = "2d10",
+                description = "Test",
+                boons = 0,
+                multitargets = targets,
+            })
+
+            local saved = DiceVision.lastInterceptedContext
+            assert.are.equal(targets, saved.multitargets)
+        end)
+    end)
+
+    describe("onReroll", function()
+        local savedComplete
+        local savedRollArgs
+
+        before_each(function()
+            DiceVision.connected = true
+            DiceVision.setMode("replace")
+
+            savedComplete = function() return "original" end
+            savedRollArgs = {
+                roll = "2d10+3",
+                description = "Power Roll",
+                complete = savedComplete,
+                instant = false,
+            }
+
+            -- Simulate a prior onBeforeRoll intercept
+            RollDialog.OnBeforeRoll({
+                rollArgs = savedRollArgs,
+                roll = "2d10+3",
+                description = "Power Roll",
+                boons = 0,
+                multitargets = nil,
+            })
+
+            -- Clear the waiting state (simulates handlePendingRoll completing)
+            DiceVision.waitingForRoll = false
+            DiceVision.pendingRoll = nil
+            _G._chatLog = {}
+
+            -- Simulate handlePendingRoll having modified rollArgs
+            savedRollArgs.roll = "15"
+            savedRollArgs.complete = function() return "wrapped" end
+            savedRollArgs.instant = true
+        end)
+
+        it("returns nil when context is nil", function()
+            assert.is_nil(RollDialog.OnReroll(nil))
+        end)
+
+        it("returns nil when not connected", function()
+            DiceVision.connected = false
+            local result = RollDialog.OnReroll({rollArgs = savedRollArgs})
+            assert.is_nil(result)
+        end)
+
+        it("returns nil when mode is off", function()
+            DiceVision.mode = "off"
+            local result = RollDialog.OnReroll({rollArgs = savedRollArgs})
+            assert.is_nil(result)
+        end)
+
+        it("returns nil when no previous intercept", function()
+            DiceVision.lastInterceptedContext = nil
+            local result = RollDialog.OnReroll({rollArgs = savedRollArgs})
+            assert.is_nil(result)
+        end)
+
+        it("returns nil when already waiting for a roll", function()
+            DiceVision.waitingForRoll = true
+            local result = RollDialog.OnReroll({rollArgs = savedRollArgs})
+            assert.is_nil(result)
+        end)
+
+        it("returns 'intercept' and sets up pendingRoll", function()
+            local result = RollDialog.OnReroll({rollArgs = savedRollArgs})
+            assert.are.equal("intercept", result)
+            assert.is_not_nil(DiceVision.pendingRoll)
+            assert.is_true(DiceVision.waitingForRoll)
+            assert.is_not_nil(DiceVision.currentRequestId)
+        end)
+
+        it("restores rollArgs.roll to original", function()
+            RollDialog.OnReroll({rollArgs = savedRollArgs})
+            assert.are.equal("2d10+3", savedRollArgs.roll)
+        end)
+
+        it("restores rollArgs.complete to original", function()
+            RollDialog.OnReroll({rollArgs = savedRollArgs})
+            assert.are.equal(savedComplete, savedRollArgs.complete)
+        end)
+
+        it("restores rollArgs.instant to original", function()
+            RollDialog.OnReroll({rollArgs = savedRollArgs})
+            assert.are.equal(false, savedRollArgs.instant)
+        end)
+
+        it("sends re-roll chat message", function()
+            RollDialog.OnReroll({rollArgs = savedRollArgs})
+            local found = false
+            for _, entry in ipairs(_G._chatLog) do
+                if string.find(entry.message, "Re%-rolling") then
+                    found = true
+                    break
+                end
+            end
+            assert.is_true(found)
+        end)
+
+        it("sets pendingRoll with saved context values", function()
+            RollDialog.OnReroll({rollArgs = savedRollArgs})
+            local pending = DiceVision.pendingRoll
+            assert.are.equal("2d10+3", pending.originalRoll)
+            assert.are.equal("Power Roll", pending.description)
+            assert.are.equal(0, pending.edges)
+            assert.are.equal(0, pending.banes)
+        end)
+    end)
+
+    describe("re-roll cleanup", function()
+        before_each(function()
+            DiceVision.connected = true
+            DiceVision.setMode("replace")
+            DiceVision.lastInterceptedContext = {
+                originalRoll = "2d10",
+                description = "Test",
+                edges = 0,
+                banes = 0,
+            }
+        end)
+
+        it("disconnect clears lastInterceptedContext", function()
+            Commands.dv("disconnect")
+            assert.is_nil(DiceVision.lastInterceptedContext)
+        end)
+
+        it("disconnect sets RollDialog.OnReroll to false", function()
+            RollDialog.OnReroll = function() end
+            Commands.dv("disconnect")
+            assert.is_false(RollDialog.OnReroll)
+        end)
+
+        it("setMode('off') clears lastInterceptedContext", function()
+            DiceVision.setMode("off")
+            assert.is_nil(DiceVision.lastInterceptedContext)
+        end)
+
+        it("setMode('off') sets RollDialog.OnReroll to false", function()
+            RollDialog.OnReroll = function() end
+            DiceVision.setMode("off")
+            assert.is_false(RollDialog.OnReroll)
+        end)
+
+        it("setMode('replace') registers RollDialog.OnReroll", function()
+            DiceVision.mode = "off"
+            DiceVision.setMode("replace")
+            assert.is_function(RollDialog.OnReroll)
+        end)
+    end)
 end)

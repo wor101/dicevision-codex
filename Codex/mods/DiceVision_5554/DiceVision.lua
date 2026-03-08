@@ -30,6 +30,9 @@ DiceVision = {
     -- Request ID for polling
     currentRequestId = nil,
 
+    -- Re-roll state
+    lastInterceptedContext = nil,
+
     -- Panel-specific state (independent of replace mode)
     panelWaitingForRoll = false,
     panelPollStartTime = 0,
@@ -356,6 +359,7 @@ local handlePendingRoll     -- Used by handleDiceVisionRoll
 local postRollToChat        -- Used by handleDiceVisionRoll
 local longPollForRolls      -- Recursive call
 local onBeforeRoll          -- Used by /dv connect, registered on RollDialog.OnBeforeRoll
+local onReroll              -- Used by /dv connect, registered on RollDialog.OnReroll
 
 -- ============================================================================
 -- API Communication
@@ -778,8 +782,10 @@ removeRollInterceptor = function()
     DiceVision.pendingRoll = nil
     DiceVision.waitingForRoll = false
     DiceVision.currentRequestId = nil
+    DiceVision.lastInterceptedContext = nil
     if RollDialog then
         RollDialog.OnBeforeRoll = false
+        RollDialog.OnReroll = false
     end
 end
 
@@ -829,9 +835,10 @@ DiceVision.setMode = function(newMode)
         stopPolling()
         removeRollInterceptor()
     elseif newMode == "replace" then
-        -- Re-register callback (removeRollInterceptor sets it to false)
+        -- Re-register callbacks (removeRollInterceptor sets them to false)
         if RollDialog then
             RollDialog.OnBeforeRoll = onBeforeRoll
+            RollDialog.OnReroll = onReroll
         end
     end
 
@@ -863,9 +870,10 @@ Commands.dv = function(args)
         validateSession(function(success, result)
             if success then
                 DiceVision.mode = "replace"
-                -- Ensure callback is registered (handles load order)
+                -- Ensure callbacks are registered (handles load order)
                 if RollDialog then
                     RollDialog.OnBeforeRoll = onBeforeRoll
+                    RollDialog.OnReroll = onReroll
                 end
                 chat.Send("[DiceVision] Connected! Ready to capture dice rolls.")
             else
@@ -1063,6 +1071,27 @@ Commands.dicevision = Commands.dv
 -- RollDialog.OnBeforeRoll Callback (official Codex hook API)
 -- ============================================================================
 
+local function startDiceIntercept(rollContext)
+    DiceVision.pendingRoll = {
+        rollArgs = rollContext.rollArgs,
+        originalRoll = rollContext.originalRoll,
+        description = rollContext.description,
+        edges = rollContext.edges,
+        banes = rollContext.banes,
+        multitargets = rollContext.multitargets,
+    }
+
+    DiceVision.waitingForRoll = true
+    DiceVision.rollStartTime = dmhub.Time() * 1000
+    DiceVision.currentRequestId = generateRequestId()
+
+    if DiceVision.connected and not DiceVision.isPolling then
+        startPolling()
+    end
+
+    showWaitingDialog()
+end
+
 onBeforeRoll = function(context)
     if not context then return nil end
     if not DiceVision then return nil end
@@ -1087,32 +1116,64 @@ onBeforeRoll = function(context)
     print(string.format("DV: onBeforeRoll - parsed edges=%d, banes=%d, multitargets=%s",
         edges, banes, tostring(context.multitargets and #context.multitargets or 0)))
 
-    DiceVision.pendingRoll = {
+    -- Save original context for re-rolls (before handlePendingRoll modifies rollArgs)
+    DiceVision.lastInterceptedContext = {
+        originalRoll = context.roll,
+        description = context.description,
+        edges = edges,
+        banes = banes,
+        multitargets = context.multitargets,
+        originalComplete = context.rollArgs.complete,
+        originalInstant = context.rollArgs.instant,
+    }
+
+    startDiceIntercept({
         rollArgs = context.rollArgs,
         originalRoll = context.roll,
         description = context.description,
         edges = edges,
         banes = banes,
         multitargets = context.multitargets,
-    }
+    })
 
-    DiceVision.waitingForRoll = true
-    DiceVision.rollStartTime = dmhub.Time() * 1000
-    DiceVision.currentRequestId = generateRequestId()
-
-    if DiceVision.connected and not DiceVision.isPolling then
-        startPolling()
-    end
-
-    showWaitingDialog()
     chat.Send("[DiceVision] Waiting for physical dice...")
 
     return "intercept"
 end
 
--- Register callback (guarded for load order)
+onReroll = function(context)
+    if not context then return nil end
+    if not DiceVision then return nil end
+    if DiceVision.mode ~= "replace" or not DiceVision.connected then return nil end
+    if DiceVision.waitingForRoll then return nil end
+
+    local saved = DiceVision.lastInterceptedContext
+    if not saved then return nil end
+
+    local rollArgs = context.rollArgs
+
+    -- Restore rollArgs fields that handlePendingRoll modified
+    rollArgs.roll = saved.originalRoll
+    rollArgs.complete = saved.originalComplete
+    rollArgs.instant = saved.originalInstant
+
+    startDiceIntercept({
+        rollArgs = rollArgs,
+        originalRoll = saved.originalRoll,
+        description = saved.description,
+        edges = saved.edges,
+        banes = saved.banes,
+        multitargets = saved.multitargets,
+    })
+
+    chat.Send("[DiceVision] Re-rolling... roll your physical dice now!")
+    return "intercept"
+end
+
+-- Register callbacks (guarded for load order)
 if RollDialog then
     RollDialog.OnBeforeRoll = onBeforeRoll
+    RollDialog.OnReroll = onReroll
 end
 
 print("DV: DiceVision script loaded")

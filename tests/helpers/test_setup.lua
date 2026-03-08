@@ -97,8 +97,8 @@ _G.loadDiceVision = function()
     -- Command handler table
     _G.Commands = {}
 
-    -- RollDialog stub (guarded nil check at line 1049)
-    _G.RollDialog = { OnBeforeRoll = false }
+    -- RollDialog stub (guarded nil check in DiceVision.lua)
+    _G.RollDialog = { OnBeforeRoll = false, OnReroll = false }
 
     -- Chat stubs: capture messages for assertions
     _G.chat = {
@@ -149,6 +149,9 @@ _G.resetDiceVisionState = function()
     DiceVision.rollStartTime = 0
     DiceVision.currentRequestId = nil
 
+    -- Reset re-roll state
+    DiceVision.lastInterceptedContext = nil
+
     -- Reset panel state
     DiceVision.panelWaitingForRoll = false
     DiceVision.panelPollStartTime = 0
@@ -166,6 +169,7 @@ _G.resetDiceVisionState = function()
 
     -- Reset RollDialog
     RollDialog.OnBeforeRoll = false
+    RollDialog.OnReroll = false
 
     -- Reset dmhub runtime stubs
     dmhub.Roll = function(rollArgs) table.insert(_G._dmhubRollLog, rollArgs) end

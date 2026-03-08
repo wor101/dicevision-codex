@@ -340,7 +340,9 @@ When `clampOutOfRange` is enabled:
 
 ---
 
-## RollDialog.OnBeforeRoll Integration
+## RollDialog Hook Integration
+
+### RollDialog.OnBeforeRoll
 
 The `RollDialog.OnBeforeRoll` callback is part of the official Codex codebase. No core file modifications are needed.
 
@@ -349,6 +351,37 @@ The `RollDialog.OnBeforeRoll` callback is part of the official Codex codebase. N
 - **On disconnect**: DiceVision sets `RollDialog.OnBeforeRoll = false` to restore normal behavior
 
 **Load order handling**: DiceVision attempts registration both at load time (guarded check for `RollDialog` existence) and at connect time (by then all mods are guaranteed to be loaded).
+
+### RollDialog.OnReroll (Re-roll Support)
+
+When DiceVision intercepts a roll via `OnBeforeRoll`, the `EmbeddedRollDialog.lua` re-roll button cannot function normally because `g_activeRoll` is `nil` (the intercept `return` skips `g_activeRoll = activeRoll`). The `RollDialog.OnReroll` hook addresses this.
+
+**How it works:**
+
+1. `onBeforeRoll` saves the original roll context to `DiceVision.lastInterceptedContext` (including the original `rollArgs.complete` callback and `rollArgs.instant` value before `handlePendingRoll` modifies them)
+2. When the user clicks "Re-roll", `EmbeddedRollDialog.lua` checks `g_activeRoll == nil` and calls `RollDialog.OnReroll({rollArgs = g_activeRollArgs})`
+3. `onReroll` restores `rollArgs.roll`, `rollArgs.complete`, and `rollArgs.instant` to their original values (preventing double-wrapping of the complete callback)
+4. `onReroll` calls `startDiceIntercept()` to set up a new pending roll and returns `"intercept"`
+
+**State flow for re-rolls:**
+```
+onBeforeRoll -> saves lastInterceptedContext (original values)
+             -> startDiceIntercept() sets up pendingRoll + polling
+             -> handlePendingRoll modifies rollArgs (roll, complete, instant)
+             -> user sees result
+
+onReroll     -> restores rollArgs from lastInterceptedContext
+             -> startDiceIntercept() sets up new pendingRoll + polling
+             -> handlePendingRoll processes new physical dice
+             -> user sees new result (can re-roll again)
+```
+
+**Key design decisions:**
+- **Separate `OnReroll` hook** (not reusing `OnBeforeRoll`): The re-roll button only has access to `g_activeRollArgs`, not to `m_boons` or `multitargetsUsed` (scoped to the submit handler). DiceVision uses its saved context instead.
+- **Saving `originalComplete`**: `handlePendingRoll` wraps `rollArgs.complete` to inject tier override + visual message. Without restoring on re-roll, each re-roll adds another wrapper, causing duplicate messages.
+- **`startDiceIntercept` helper**: Shared between `onBeforeRoll` and `onReroll` to avoid duplicating pending roll setup logic.
+
+**Registration/cleanup:** `RollDialog.OnReroll` is registered alongside `RollDialog.OnBeforeRoll` at connect time, load time, and `setMode("replace")`. It is set to `false` in `removeRollInterceptor()` (called by disconnect and `setMode("off")`).
 
 ---
 
