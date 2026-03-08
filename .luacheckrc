@@ -1,6 +1,11 @@
 std = "lua51"
 max_line_length = false
 
+-- Ignore vendored dependencies installed by luarocks
+exclude_files = {
+    ".luarocks/**",
+}
+
 -- Suppress unused argument warnings (common in callback-heavy Codex engine code)
 unused_args = false
 -- Allow _prefixed variables as intentionally unused (e.g. local _originalPrint = print)
