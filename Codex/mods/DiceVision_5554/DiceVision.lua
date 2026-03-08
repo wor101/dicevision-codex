@@ -2,7 +2,7 @@
     DiceVision Integration for MCDM Codex - MINIMAL TEST
 ]]
 
-local mod = dmhub.GetModLoading()
+local _ = dmhub.GetModLoading() -- luacheck: ignore
 
 -- ============================================================================
 -- Configuration & State
@@ -228,7 +228,7 @@ function DiceVisionRollMessage.Render(self, message)
     end
 
     local dicePanels = {}
-    for i, die in ipairs(dice) do
+    for _, die in ipairs(dice) do
         local faces = die.faces or 10
         local value = die.value or 0
         dicePanels[#dicePanels+1] = DiceVisionRollMessage.CreateDiePanel(faces, value)
@@ -384,7 +384,7 @@ local function validateSession(callback)
     }
 end
 
-local function handleSessionExpired()
+local function handleSessionExpired() -- luacheck: ignore
     chat.Send("[DiceVision] Session expired. Use /dv connect <code> to reconnect.")
     stopPolling()
     removeRollInterceptor()
@@ -592,7 +592,7 @@ hideWaitingDialog = function()
     -- TODO: Hide the waiting indicator
 end
 
-local function postDiceVisionRollToChat(rollData, rollInfo, pendingRoll)
+local function postDiceVisionRollToChat(rollData, rollInfo, pendingRoll) -- luacheck: ignore
     local modifier = DiceRollLogic.extractModifierFromRoll(pendingRoll.roll)
     print(string.format("DV: postDiceVisionRollToChat - modifier=%d, total=%d, tier=%s",
         modifier, rollInfo.total, tostring(rollInfo.tiers)))
@@ -746,7 +746,7 @@ handlePendingRoll = function(rollData)
     return true
 end
 
-checkRollTimeout = function()
+checkRollTimeout = function() -- luacheck: ignore
     if DiceVision.waitingForRoll then
         local elapsed = (dmhub.Time() * 1000) - DiceVision.rollStartTime
         if elapsed > DiceVision.rollTimeout then

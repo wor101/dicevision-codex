@@ -7,9 +7,8 @@ on:
     branches: [main]
 
 jobs:
-  test:
+  lint:
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
 
@@ -19,8 +18,37 @@ jobs:
 
       - uses: leafo/gh-actions-luarocks@v4
 
-      - name: Install busted
-        run: luarocks install busted
+      - name: Install luacheck
+        run: luarocks install luacheck
 
-      - name: Run tests
-        run: busted --verbose
+      - name: Check for non-ASCII characters in Lua files
+        run: |
+          if grep -rPn '[\x80-\xFF]' --include='*.lua' .; then
+            echo "::error::Non-ASCII characters found in Lua files (see above)"
+            exit 1
+          fi
+
+      - name: Run luacheck
+        run: luacheck .
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: leafo/gh-actions-lua@v10
+        with:
+          luaVersion: "5.1"
+
+      - uses: leafo/gh-actions-luarocks@v4
+
+      - name: Install dependencies
+        run: |
+          luarocks install busted
+          luarocks install luacov
+
+      - name: Run tests with coverage
+        run: busted --verbose --coverage
+
+      - name: Print coverage report
+        run: luacov && cat luacov.report.out
