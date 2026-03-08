@@ -18,15 +18,15 @@ jobs:
 
       - uses: leafo/gh-actions-luarocks@v4
 
-      - name: Install luacheck
-        run: luarocks install luacheck
-
       - name: Check for non-ASCII characters in Lua files
         run: |
           if grep -rPn '[\x80-\xFF]' --include='*.lua' .; then
             echo "::error::Non-ASCII characters found in Lua files (see above)"
             exit 1
           fi
+
+      - name: Install luacheck
+        run: luarocks install luacheck
 
       - name: Run luacheck
         run: luacheck .
