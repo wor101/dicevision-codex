@@ -173,24 +173,58 @@ function DiceRollLogic.detectDiceSelection(pendingRoll)
     if not pendingRoll or not pendingRoll.originalRoll then
         return nil
     end
-    local creature = pendingRoll.rollArgs and pendingRoll.rollArgs.creature
-    local rollInfo = dmhub.ParseRoll(pendingRoll.originalRoll, creature)
-    if rollInfo and rollInfo.categories then
-        for _, category in pairs(rollInfo.categories) do
-            if category.groups then
-                for _, group in ipairs(category.groups) do
-                    if group.numKeep and group.numKeep > 0 and group.numDice and group.numDice > group.numKeep then
-                        return {
-                            keep = "highest",
-                            count = group.numKeep,
-                            total = group.numDice,
-                        }
+
+    local rollStr = pendingRoll.originalRoll
+    local numKeep, numDice
+
+    -- Method 1: Parse roll string for "keep [low|high] N" pattern
+    local keepMatch = string.match(rollStr, "keep%s+%a*%s*(%d+)")
+    if keepMatch then
+        numKeep = tonumber(keepMatch)
+        numDice = tonumber(string.match(rollStr, "(%d+)d%d+"))
+    end
+
+    -- Method 2: Fall back to dmhub.ParseRoll()
+    if not numKeep or not numDice then
+        local creature = pendingRoll.rollArgs and pendingRoll.rollArgs.creature
+        local rollInfo = dmhub.ParseRoll(rollStr, creature)
+        if rollInfo and rollInfo.categories then
+            for _, category in pairs(rollInfo.categories) do
+                if category.groups then
+                    for _, group in ipairs(category.groups) do
+                        if group.numKeep and group.numKeep > 0
+                           and group.numDice and group.numDice > group.numKeep then
+                            numKeep = group.numKeep
+                            numDice = group.numDice
+                            break
+                        end
                     end
                 end
+                if numKeep then break end
             end
         end
     end
-    return nil
+
+    if not numKeep or not numDice or numKeep >= numDice then
+        return nil
+    end
+
+    -- Determine keep direction
+    local keepDirection = "highest"
+    if string.find(rollStr, "keep%s+low") then
+        keepDirection = "lowest"
+    elseif dmhub.GetRollAdvantage then
+        local advState = dmhub.GetRollAdvantage(rollStr)
+        if advState == "disadvantage" then
+            keepDirection = "lowest"
+        end
+    end
+
+    return {
+        keep = keepDirection,
+        count = numKeep,
+        total = numDice,
+    }
 end
 
 function DiceRollLogic.getEffectiveRules(pendingRoll)

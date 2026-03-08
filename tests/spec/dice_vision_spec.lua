@@ -455,6 +455,121 @@ describe("DiceVision", function()
         end)
     end)
 
+    -- ============================================================================
+    -- Category 4: CreateDiePanel Styling
+    -- ============================================================================
+
+    describe("CreateDiePanel", function()
+        it("uses normal styling when dropped is nil", function()
+            local panel = DiceVisionRollMessage.CreateDiePanel(10, 7)
+            assert.are.equal(0.7, panel.saturation)
+            assert.are.equal(0.4, panel.brightness)
+        end)
+
+        it("uses normal styling when dropped is false", function()
+            local panel = DiceVisionRollMessage.CreateDiePanel(10, 7, false)
+            assert.are.equal(0.7, panel.saturation)
+            assert.are.equal(0.4, panel.brightness)
+        end)
+
+        it("uses dimmed styling when dropped is true", function()
+            local panel = DiceVisionRollMessage.CreateDiePanel(10, 7, true)
+            assert.are.equal(0.3, panel.saturation)
+            assert.are.equal(0.2, panel.brightness)
+        end)
+
+        it("uses dimmed label color when dropped is true", function()
+            local panel = DiceVisionRollMessage.CreateDiePanel(10, 7, true)
+            -- Inner panel is first array element, label is its first array element
+            local innerPanel = panel[1]
+            local label = innerPanel[1]
+            assert.are.equal("#888888", label.color)
+        end)
+
+        it("uses normal label color when not dropped", function()
+            local panel = DiceVisionRollMessage.CreateDiePanel(10, 7, false)
+            local innerPanel = panel[1]
+            local label = innerPanel[1]
+            -- dmhub.GetDiceStyling returns {} in tests, so fallback is "#ffffff"
+            assert.are.equal("#ffffff", label.color)
+        end)
+    end)
+
+    -- ============================================================================
+    -- Category 5: Dropped Dice in Chat Messages
+    -- ============================================================================
+
+    describe("postRollToChat with dropped dice", function()
+        it("includes dropped dice in message when keep rule is active", function()
+            -- Set up keep-lowest-2 rule
+            DiceVision.rules.diceSelection = {keep = "lowest", count = 2}
+            local rollData = {
+                dice = {
+                    {type = "d10", value = 8},
+                    {type = "d10", value = 3},
+                    {type = "d10", value = 5},
+                },
+                total = 16,
+            }
+            DiceVision.postRollToChat(rollData)
+            assert.are.equal(1, #_G._chatLog)
+            local msg = _G._chatLog[1].message
+            local dice = msg.dice
+            assert.are.equal(3, #dice)
+            -- Count dropped vs kept
+            local keptCount = 0
+            local droppedCount = 0
+            for _, die in ipairs(dice) do
+                if die.dropped then
+                    droppedCount = droppedCount + 1
+                else
+                    keptCount = keptCount + 1
+                end
+            end
+            assert.are.equal(2, keptCount)
+            assert.are.equal(1, droppedCount)
+        end)
+
+        it("total reflects only kept dice, not dropped", function()
+            DiceVision.rules.diceSelection = {keep = "lowest", count = 2}
+            local rollData = {
+                dice = {
+                    {type = "d10", value = 8},
+                    {type = "d10", value = 3},
+                    {type = "d10", value = 5},
+                },
+                total = 16,
+            }
+            DiceVision.postRollToChat(rollData)
+            local msg = _G._chatLog[1].message
+            -- Kept dice are the two lowest: 3 and 5 (after 0->10 mapping: 8,3,5 stay)
+            -- Total should be sum of kept dice only
+            local keptSum = 0
+            for _, die in ipairs(msg.dice) do
+                if not die.dropped then
+                    keptSum = keptSum + die.value
+                end
+            end
+            assert.are.equal(msg.total, keptSum)
+        end)
+
+        it("has no dropped entries without selection rule", function()
+            DiceVision.rules.diceSelection = nil
+            local rollData = {
+                dice = {
+                    {type = "d10", value = 3},
+                    {type = "d10", value = 5},
+                },
+                total = 8,
+            }
+            DiceVision.postRollToChat(rollData)
+            local msg = _G._chatLog[1].message
+            for _, die in ipairs(msg.dice) do
+                assert.is_falsy(die.dropped)
+            end
+        end)
+    end)
+
     describe("mode command", function()
         it("changes mode and sends confirmation with old -> new", function()
             DiceVision.mode = "off"
