@@ -467,6 +467,7 @@ longPollForRolls = function()
             -- Replace mode timeout: if still waiting, fall back to virtual dice
             if DiceVision.waitingForRoll then
                 local rollArgs = DiceVision.pendingRoll and DiceVision.pendingRoll.rollArgs
+                local setActiveRoll = DiceVision.pendingRoll and DiceVision.pendingRoll.setActiveRoll
 
                 chat.Send("[DiceVision] Physical dice timeout. Falling back to virtual dice...")
                 DiceVision.waitingForRoll = false
@@ -476,7 +477,10 @@ longPollForRolls = function()
                 stopPolling()
 
                 if rollArgs then
-                    dmhub.Roll(rollArgs)
+                    local activeRoll = dmhub.Roll(rollArgs)
+                    if setActiveRoll then
+                        setActiveRoll(activeRoll)
+                    end
                 end
             end
 
@@ -494,6 +498,7 @@ longPollForRolls = function()
             -- Replace mode: fall back to virtual dice on error
             if DiceVision.waitingForRoll then
                 local rollArgs = DiceVision.pendingRoll and DiceVision.pendingRoll.rollArgs
+                local setActiveRoll = DiceVision.pendingRoll and DiceVision.pendingRoll.setActiveRoll
 
                 chat.Send("[DiceVision] Connection error. Falling back to virtual dice...")
                 DiceVision.waitingForRoll = false
@@ -503,7 +508,10 @@ longPollForRolls = function()
                 stopPolling()
 
                 if rollArgs then
-                    dmhub.Roll(rollArgs)
+                    local activeRoll = dmhub.Roll(rollArgs)
+                    if setActiveRoll then
+                        setActiveRoll(activeRoll)
+                    end
                 end
             end
 
@@ -760,7 +768,13 @@ handlePendingRoll = function(rollData)
         end
     end
 
-    dmhub.Roll(rollArgs)
+    local activeRoll = dmhub.Roll(rollArgs)
+
+    -- Tell the codex about the active roll so re-rolls work
+    if pendingRoll.setActiveRoll then
+        pendingRoll.setActiveRoll(activeRoll)
+    end
+
     return true
 end
 
@@ -836,12 +850,16 @@ DiceVision.setMode = function(newMode)
         -- If a pending ability roll exists, fall back to virtual dice
         if DiceVision.waitingForRoll and DiceVision.pendingRoll then
             local rollArgs = DiceVision.pendingRoll.rollArgs
+            local setActiveRoll = DiceVision.pendingRoll.setActiveRoll
             DiceVision.waitingForRoll = false
             DiceVision.pendingRoll = nil
             DiceVision.currentRequestId = generateRequestId()
             hideWaitingDialog()
             if rollArgs then
-                dmhub.Roll(rollArgs)
+                local activeRoll = dmhub.Roll(rollArgs)
+                if setActiveRoll then
+                    setActiveRoll(activeRoll)
+                end
             end
         end
         stopPolling()
@@ -1112,6 +1130,7 @@ onBeforeRoll = function(context)
         edges = edges,
         banes = banes,
         multitargets = context.multitargets,
+        setActiveRoll = context.setActiveRoll,
     }
 
     DiceVision.waitingForRoll = true
