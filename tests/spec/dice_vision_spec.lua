@@ -570,6 +570,516 @@ describe("DiceVision", function()
         end)
     end)
 
+    -- ============================================================================
+    -- Category 6: onReroll Callback
+    -- ============================================================================
+
+    describe("onReroll callback", function()
+        -- Capture the onReroll function before resetDiceVisionState clears it
+        local onRerollFn
+        before_each(function()
+            DiceVision.setMode("replace")
+            onRerollFn = RollDialog.OnReroll
+            -- Reset state for each test
+            resetDiceVisionState()
+        end)
+
+        it("returns nil when mode is off", function()
+            DiceVision.mode = "off"
+            DiceVision.connected = true
+            local result = onRerollFn({
+                originalRoll = "2d10+5",
+                description = "Test",
+                amendWithResult = function() end,
+                rollArgs = { roll = "2d10+5" },
+            })
+            assert.is_nil(result)
+        end)
+
+        it("returns nil when not connected", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = false
+            local result = onRerollFn({
+                originalRoll = "2d10+5",
+                description = "Test",
+                amendWithResult = function() end,
+                rollArgs = { roll = "2d10+5" },
+            })
+            assert.is_nil(result)
+        end)
+
+        it("returns nil when already waiting for a roll", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.waitingForRoll = true
+            local result = onRerollFn({
+                originalRoll = "2d10+5",
+                description = "Test",
+                amendWithResult = function() end,
+                rollArgs = { roll = "2d10+5" },
+            })
+            assert.is_nil(result)
+        end)
+
+        it("returns 'intercept' and sets pendingRoll with isReroll=true", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            local amendFn = function() end
+            local result = onRerollFn({
+                originalRoll = "2d10+5",
+                description = "Test Reroll",
+                amendWithResult = amendFn,
+                rollArgs = { roll = "2d10+5", boons = 0 },
+            })
+            assert.are.equal("intercept", result)
+            assert.is_true(DiceVision.waitingForRoll)
+            assert.is_not_nil(DiceVision.pendingRoll)
+            assert.is_true(DiceVision.pendingRoll.isReroll)
+            assert.are.equal(amendFn, DiceVision.pendingRoll.amendWithResult)
+            assert.are.equal("Test Reroll", DiceVision.pendingRoll.description)
+        end)
+
+        it("parses edges from originalRoll string", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            onRerollFn({
+                originalRoll = "2d10+5 1 edge",
+                description = "Test",
+                amendWithResult = function() end,
+                rollArgs = { roll = "2d10+5", boons = 0 },
+            })
+            assert.are.equal(1, DiceVision.pendingRoll.edges)
+            assert.are.equal(0, DiceVision.pendingRoll.banes)
+        end)
+
+        it("parses banes from originalRoll string", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            onRerollFn({
+                originalRoll = "2d10+5 2 banes",
+                description = "Test",
+                amendWithResult = function() end,
+                rollArgs = { roll = "2d10+5", boons = 0 },
+            })
+            assert.are.equal(0, DiceVision.pendingRoll.edges)
+            assert.are.equal(2, DiceVision.pendingRoll.banes)
+        end)
+
+        it("falls back to SplitBoons when roll string has no edges/banes", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            onRerollFn({
+                originalRoll = "2d10+5",
+                description = "Test",
+                amendWithResult = function() end,
+                rollArgs = { roll = "2d10+5", boons = 2 },
+            })
+            assert.are.equal(2, DiceVision.pendingRoll.edges)
+            assert.are.equal(0, DiceVision.pendingRoll.banes)
+        end)
+
+        it("sends re-roll waiting message to chat", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            onRerollFn({
+                originalRoll = "2d10+5",
+                description = "Test",
+                amendWithResult = function() end,
+                rollArgs = { roll = "2d10+5", boons = 0 },
+            })
+            local found = false
+            for _, entry in ipairs(_G._chatLog) do
+                if string.find(entry.message, "re%-roll") then
+                    found = true
+                    break
+                end
+            end
+            assert.is_true(found)
+        end)
+    end)
+
+    -- ============================================================================
+    -- Category 7: handlePendingRoll Re-roll Path
+    -- ============================================================================
+
+    describe("handlePendingRoll re-roll path", function()
+        it("calls amendWithResult with finalTotal for re-rolls", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            local amendCalled = nil
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Re-roll Test",
+                edges = 0,
+                banes = 0,
+                isReroll = true,
+                amendWithResult = function(val) amendCalled = val end,
+            }
+            DiceVision.waitingForRoll = true
+
+            local rollData = {
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            }
+            -- handleDiceVisionRoll calls handlePendingRoll internally
+            -- We need to call handlePendingRoll via the exposed path
+            -- Since handlePendingRoll is local, trigger via handleDiceVisionRoll:
+            -- Stub net.Get is noop, so we call handleDiceVisionRoll directly
+            -- But handleDiceVisionRoll is also local. We use the pattern from
+            -- longPollForRolls: simulate a net.Get success that calls handleDiceVisionRoll.
+            -- Actually, we can set up pendingRoll and trigger handleDiceVisionRoll
+            -- through the global entry point. Let's use net.Get stub to call back immediately.
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({
+                        rolls = { rollData }
+                    })
+                end
+            end
+
+            -- Trigger polling which will call net.Get -> success -> handleDiceVisionRoll
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+
+            net.Get = originalNetGet
+
+            -- amendWithResult should have been called with the total (7+3+5 = 15)
+            assert.is_not_nil(amendCalled)
+            assert.are.equal("15", amendCalled)
+            -- dmhub.Roll should NOT have been called
+            assert.are.equal(0, #_G._dmhubRollLog)
+        end)
+
+        it("includes edge modifier in finalTotal for re-rolls", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            local amendCalled = nil
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Re-roll Edge Test",
+                edges = 1,
+                banes = 0,
+                isReroll = true,
+                amendWithResult = function(val) amendCalled = val end,
+            }
+            DiceVision.waitingForRoll = true
+
+            local rollData = {
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            }
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            -- 7+3 = 10 dice, +5 modifier, +2 edge mod = 17
+            assert.are.equal("17", amendCalled)
+        end)
+
+        it("sends DiceVisionRollMessage to chat for re-rolls", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Re-roll Chat Test",
+                edges = 0,
+                banes = 0,
+                isReroll = true,
+                amendWithResult = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            local rollData = {
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            }
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            -- Check that a custom chat message was sent
+            local customFound = false
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "custom" and entry.message.description == "Re-roll Chat Test" then
+                    customFound = true
+                    break
+                end
+            end
+            assert.is_true(customFound)
+        end)
+
+        it("does not call amendWithResult for non-reroll pending rolls", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Normal Roll",
+                edges = 0,
+                banes = 0,
+            }
+            DiceVision.waitingForRoll = true
+
+            local rollData = {
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            }
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            -- For non-reroll, dmhub.Roll should be called instead
+            assert.are.equal(1, #_G._dmhubRollLog)
+        end)
+    end)
+
+    -- ============================================================================
+    -- Category 8: Fallback Paths for Re-rolls
+    -- ============================================================================
+
+    describe("fallback paths for re-rolls", function()
+        it("timeout calls amendWithResult(originalRoll) for re-rolls", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            local amendCalled = nil
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5" },
+                originalRoll = "2d10+5",
+                description = "Timeout Reroll",
+                edges = 0,
+                banes = 0,
+                isReroll = true,
+                amendWithResult = function(val) amendCalled = val end,
+            }
+            DiceVision.waitingForRoll = true
+
+            -- Simulate net.Get success with no rolls (triggers timeout path)
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = {} })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            assert.are.equal("2d10+5", amendCalled)
+            assert.are.equal(0, #_G._dmhubRollLog)
+        end)
+
+        it("error calls amendWithResult(originalRoll) for re-rolls", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            local amendCalled = nil
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5" },
+                originalRoll = "2d10+5",
+                description = "Error Reroll",
+                edges = 0,
+                banes = 0,
+                isReroll = true,
+                amendWithResult = function(val) amendCalled = val end,
+            }
+            DiceVision.waitingForRoll = true
+
+            -- Simulate net.Get error
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.error then
+                    args.error("connection failed", 500)
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            assert.are.equal("2d10+5", amendCalled)
+            assert.are.equal(0, #_G._dmhubRollLog)
+        end)
+
+        it("mode-off calls amendWithResult(originalRoll) for re-rolls", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            local amendCalled = nil
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5" },
+                originalRoll = "2d10+5",
+                description = "Mode Off Reroll",
+                edges = 0,
+                banes = 0,
+                isReroll = true,
+                amendWithResult = function(val) amendCalled = val end,
+            }
+            DiceVision.waitingForRoll = true
+
+            DiceVision.setMode("off")
+
+            assert.are.equal("2d10+5", amendCalled)
+            assert.are.equal(0, #_G._dmhubRollLog)
+        end)
+
+        it("non-reroll timeout fallback still calls dmhub.Roll", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5" },
+                originalRoll = "2d10+5",
+                description = "Normal Timeout",
+                edges = 0,
+                banes = 0,
+            }
+            DiceVision.waitingForRoll = true
+
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = {} })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            assert.are.equal(1, #_G._dmhubRollLog)
+            assert.are.equal("2d10+5", _G._dmhubRollLog[1].roll)
+        end)
+
+        it("non-reroll error fallback still calls dmhub.Roll", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5" },
+                originalRoll = "2d10+5",
+                description = "Normal Error",
+                edges = 0,
+                banes = 0,
+            }
+            DiceVision.waitingForRoll = true
+
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.error then
+                    args.error("connection failed", 500)
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            assert.are.equal(1, #_G._dmhubRollLog)
+            assert.are.equal("2d10+5", _G._dmhubRollLog[1].roll)
+        end)
+
+        it("non-reroll mode-off fallback still calls dmhub.Roll", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5" },
+                originalRoll = "2d10+5",
+                description = "Normal Mode Off",
+                edges = 0,
+                banes = 0,
+            }
+            DiceVision.waitingForRoll = true
+
+            DiceVision.setMode("off")
+
+            assert.are.equal(1, #_G._dmhubRollLog)
+            assert.are.equal("2d10+5", _G._dmhubRollLog[1].roll)
+        end)
+    end)
+
+    -- ============================================================================
+    -- Category 9: Hook Lifecycle
+    -- ============================================================================
+
+    describe("OnReroll hook lifecycle", function()
+        it("is registered when switching to replace mode", function()
+            DiceVision.setMode("replace")
+            assert.is_function(RollDialog.OnReroll)
+        end)
+
+        it("is cleared on disconnect", function()
+            RollDialog.OnReroll = function() end
+            Commands.dv("disconnect")
+            assert.is_false(RollDialog.OnReroll)
+        end)
+
+        it("is cleared when mode set to off", function()
+            DiceVision.mode = "replace"
+            RollDialog.OnReroll = function() end
+            DiceVision.setMode("off")
+            assert.is_false(RollDialog.OnReroll)
+        end)
+
+        it("is registered on connect success", function()
+            -- Stub net.Get to simulate successful validation
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ active = true })
+                end
+            end
+            Commands.dv("connect ABC123")
+            net.Get = originalNetGet
+            assert.is_function(RollDialog.OnReroll)
+        end)
+
+        it("is registered at load time", function()
+            -- After loadDiceVision() in setup(), OnReroll should be set
+            -- We need to check this was set. Since resetDiceVisionState resets it,
+            -- reload and check
+            local originalNetGet = net.Get
+            net.Get = function() end
+            loadDiceVision()
+            net.Get = originalNetGet
+            assert.is_function(RollDialog.OnReroll)
+        end)
+    end)
+
     describe("mode command", function()
         it("changes mode and sends confirmation with old -> new", function()
             DiceVision.mode = "off"

@@ -360,6 +360,7 @@ local handlePendingRoll     -- Used by handleDiceVisionRoll
 local postRollToChat        -- Used by handleDiceVisionRoll
 local longPollForRolls      -- Recursive call
 local onBeforeRoll          -- Used by /dv connect, registered on RollDialog.OnBeforeRoll
+local onReroll              -- Used by /dv connect, registered on RollDialog.OnReroll
 
 -- ============================================================================
 -- API Communication
@@ -466,7 +467,8 @@ longPollForRolls = function()
 
             -- Replace mode timeout: if still waiting, fall back to virtual dice
             if DiceVision.waitingForRoll then
-                local rollArgs = DiceVision.pendingRoll and DiceVision.pendingRoll.rollArgs
+                local pendingRoll = DiceVision.pendingRoll
+                local rollArgs = pendingRoll and pendingRoll.rollArgs
 
                 chat.Send("[DiceVision] Physical dice timeout. Falling back to virtual dice...")
                 DiceVision.waitingForRoll = false
@@ -475,7 +477,9 @@ longPollForRolls = function()
                 hideWaitingDialog()
                 stopPolling()
 
-                if rollArgs then
+                if pendingRoll and pendingRoll.isReroll and pendingRoll.amendWithResult then
+                    pendingRoll.amendWithResult(pendingRoll.originalRoll)
+                elseif rollArgs then
                     dmhub.Roll(rollArgs)
                 end
             end
@@ -493,7 +497,8 @@ longPollForRolls = function()
 
             -- Replace mode: fall back to virtual dice on error
             if DiceVision.waitingForRoll then
-                local rollArgs = DiceVision.pendingRoll and DiceVision.pendingRoll.rollArgs
+                local pendingRoll = DiceVision.pendingRoll
+                local rollArgs = pendingRoll and pendingRoll.rollArgs
 
                 chat.Send("[DiceVision] Connection error. Falling back to virtual dice...")
                 DiceVision.waitingForRoll = false
@@ -502,7 +507,9 @@ longPollForRolls = function()
                 hideWaitingDialog()
                 stopPolling()
 
-                if rollArgs then
+                if pendingRoll and pendingRoll.isReroll and pendingRoll.amendWithResult then
+                    pendingRoll.amendWithResult(pendingRoll.originalRoll)
+                elseif rollArgs then
                     dmhub.Roll(rollArgs)
                 end
             end
@@ -708,6 +715,14 @@ handlePendingRoll = function(rollData)
         tokenid = tokenid,
         rollSource = "ability",
     }
+
+    -- Re-roll path: use amendWithResult callback instead of dmhub.Roll
+    if pendingRoll.isReroll and pendingRoll.amendWithResult then
+        chat.SendCustom(visualMessage)
+        pendingRoll.amendWithResult(tostring(finalTotal))
+        return true
+    end
+
     rollArgs.instant = true
 
     print(string.format("DV: handlePendingRoll - isNonTargeted=%s, rollArgs.roll='%s'",
@@ -798,6 +813,7 @@ removeRollInterceptor = function()
     DiceVision.currentRequestId = nil
     if RollDialog then
         RollDialog.OnBeforeRoll = false
+        RollDialog.OnReroll = false
     end
 end
 
@@ -835,21 +851,25 @@ DiceVision.setMode = function(newMode)
     if newMode == "off" then
         -- If a pending ability roll exists, fall back to virtual dice
         if DiceVision.waitingForRoll and DiceVision.pendingRoll then
-            local rollArgs = DiceVision.pendingRoll.rollArgs
+            local pendingRoll = DiceVision.pendingRoll
+            local rollArgs = pendingRoll.rollArgs
             DiceVision.waitingForRoll = false
             DiceVision.pendingRoll = nil
             DiceVision.currentRequestId = generateRequestId()
             hideWaitingDialog()
-            if rollArgs then
+            if pendingRoll.isReroll and pendingRoll.amendWithResult then
+                pendingRoll.amendWithResult(pendingRoll.originalRoll)
+            elseif rollArgs then
                 dmhub.Roll(rollArgs)
             end
         end
         stopPolling()
         removeRollInterceptor()
     elseif newMode == "replace" then
-        -- Re-register callback (removeRollInterceptor sets it to false)
+        -- Re-register callbacks (removeRollInterceptor sets them to false)
         if RollDialog then
             RollDialog.OnBeforeRoll = onBeforeRoll
+            RollDialog.OnReroll = onReroll
         end
     end
 
@@ -881,9 +901,10 @@ Commands.dv = function(args)
         validateSession(function(success, result)
             if success then
                 DiceVision.mode = "replace"
-                -- Ensure callback is registered (handles load order)
+                -- Ensure callbacks are registered (handles load order)
                 if RollDialog then
                     RollDialog.OnBeforeRoll = onBeforeRoll
+                    RollDialog.OnReroll = onReroll
                 end
                 chat.Send("[DiceVision] Connected! Ready to capture dice rolls.")
             else
@@ -1128,9 +1149,62 @@ onBeforeRoll = function(context)
     return "intercept"
 end
 
--- Register callback (guarded for load order)
+-- ============================================================================
+-- RollDialog.OnReroll Callback (official Codex hook API)
+-- ============================================================================
+
+onReroll = function(hookData)
+    if not hookData then return nil end
+    if not DiceVision then return nil end
+
+    if DiceVision.mode ~= "replace" or not DiceVision.connected then
+        return nil
+    end
+
+    if DiceVision.waitingForRoll then
+        return nil
+    end
+
+    print(string.format("DV: onReroll - originalRoll='%s', description='%s'",
+        tostring(hookData.originalRoll), tostring(hookData.description)))
+
+    local edges, banes = DiceRollLogic.ParseBoonsFromRollString(hookData.originalRoll)
+
+    if edges == 0 and banes == 0 and hookData.rollArgs then
+        edges, banes = DiceRollLogic.SplitBoons(hookData.rollArgs.boons)
+    end
+
+    print(string.format("DV: onReroll - parsed edges=%d, banes=%d", edges, banes))
+
+    DiceVision.pendingRoll = {
+        rollArgs = hookData.rollArgs,
+        originalRoll = hookData.originalRoll,
+        description = hookData.description,
+        edges = edges,
+        banes = banes,
+        multitargets = hookData.multitargets,
+        isReroll = true,
+        amendWithResult = hookData.amendWithResult,
+    }
+
+    DiceVision.waitingForRoll = true
+    DiceVision.rollStartTime = dmhub.Time() * 1000
+    DiceVision.currentRequestId = generateRequestId()
+
+    if DiceVision.connected and not DiceVision.isPolling then
+        startPolling()
+    end
+
+    showWaitingDialog()
+    chat.Send("[DiceVision] Waiting for physical dice (re-roll)...")
+
+    return "intercept"
+end
+
+-- Register callbacks (guarded for load order)
 if RollDialog then
     RollDialog.OnBeforeRoll = onBeforeRoll
+    RollDialog.OnReroll = onReroll
 end
 
 print("DV: DiceVision script loaded")
