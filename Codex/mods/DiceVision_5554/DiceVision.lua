@@ -68,9 +68,6 @@ local function generateRequestId()
     return tostring(os.time()) .. "-" .. tostring(math.random(1000, 9999))
 end
 
--- Forward declaration for functions called before definition
-local hideWaitingDialog
-
 -- Expose for DVDicePanel.lua
 DiceVision.generateRequestId = generateRequestId
 
@@ -355,7 +352,7 @@ end
 local startPolling          -- Used by onBeforeRoll
 local stopPolling
 local removeRollInterceptor
-local checkRollTimeout      -- Used by longPollForRolls
+local abandonPendingRoll    -- Used by longPollForRolls, setMode
 local handlePendingRoll     -- Used by handleDiceVisionRoll
 local postRollToChat        -- Used by handleDiceVisionRoll
 local longPollForRolls      -- Recursive call
@@ -431,6 +428,26 @@ local function handleDiceVisionRoll(rollData)
     end
 end
 
+abandonPendingRoll = function()
+    local pendingRoll = DiceVision.pendingRoll
+    if not pendingRoll then return end
+    local rollArgs = pendingRoll.rollArgs
+
+    DiceVision.waitingForRoll = false
+    DiceVision.pendingRoll = nil
+    DiceVision.currentRequestId = generateRequestId()
+    stopPolling()
+
+    if pendingRoll.isReroll and pendingRoll.amendWithResult then
+        if pendingRoll.setActiveRoll and pendingRoll.activeRoll then
+            pendingRoll.setActiveRoll(pendingRoll.activeRoll)
+        end
+        pendingRoll.amendWithResult(pendingRoll.originalRoll)
+    elseif rollArgs then
+        dmhub.Roll(rollArgs)
+    end
+end
+
 longPollForRolls = function()
     if not DiceVision.connected or not DiceVision.sessionCode then
         return
@@ -467,24 +484,8 @@ longPollForRolls = function()
 
             -- Replace mode timeout: if still waiting, fall back to virtual dice
             if DiceVision.waitingForRoll then
-                local pendingRoll = DiceVision.pendingRoll
-                local rollArgs = pendingRoll and pendingRoll.rollArgs
-
                 chat.Send("[DiceVision] Physical dice timeout. Falling back to virtual dice...")
-                DiceVision.waitingForRoll = false
-                DiceVision.pendingRoll = nil
-                DiceVision.currentRequestId = generateRequestId()
-                hideWaitingDialog()
-                stopPolling()
-
-                if pendingRoll and pendingRoll.isReroll and pendingRoll.amendWithResult then
-                    if pendingRoll.setActiveRoll and pendingRoll.activeRoll then
-                        pendingRoll.setActiveRoll(pendingRoll.activeRoll)
-                    end
-                    pendingRoll.amendWithResult(pendingRoll.originalRoll)
-                elseif rollArgs then
-                    dmhub.Roll(rollArgs)
-                end
+                abandonPendingRoll()
             end
 
             -- Panel timeout: if still waiting, roll didn't arrive
@@ -500,24 +501,8 @@ longPollForRolls = function()
 
             -- Replace mode: fall back to virtual dice on error
             if DiceVision.waitingForRoll then
-                local pendingRoll = DiceVision.pendingRoll
-                local rollArgs = pendingRoll and pendingRoll.rollArgs
-
                 chat.Send("[DiceVision] Connection error. Falling back to virtual dice...")
-                DiceVision.waitingForRoll = false
-                DiceVision.pendingRoll = nil
-                DiceVision.currentRequestId = generateRequestId()
-                hideWaitingDialog()
-                stopPolling()
-
-                if pendingRoll and pendingRoll.isReroll and pendingRoll.amendWithResult then
-                    if pendingRoll.setActiveRoll and pendingRoll.activeRoll then
-                        pendingRoll.setActiveRoll(pendingRoll.activeRoll)
-                    end
-                    pendingRoll.amendWithResult(pendingRoll.originalRoll)
-                elseif rollArgs then
-                    dmhub.Roll(rollArgs)
-                end
+                abandonPendingRoll()
             end
 
             -- Panel: clear waiting state on error
@@ -533,6 +518,34 @@ end
 -- ============================================================================
 -- Level 1: Chat Integration
 -- ============================================================================
+
+local function buildDiceMessage(rollDice, pendingRoll)
+    local processedDice, droppedDice = DiceRollLogic.applyDiceRules(rollDice, pendingRoll)
+    local diceForMessage = {}
+    local diceSum = 0
+    for _, die in ipairs(processedDice) do
+        diceForMessage[#diceForMessage + 1] = {
+            faces = DiceRollLogic.getDiceFaces(die.type),
+            value = die.value,
+            originalValue = die.originalValue,
+        }
+        diceSum = diceSum + die.value
+    end
+    if droppedDice and #droppedDice > 0 then
+        local droppedValues = {}
+        for _, die in ipairs(droppedDice) do
+            diceForMessage[#diceForMessage + 1] = {
+                faces = DiceRollLogic.getDiceFaces(die.type),
+                value = die.value,
+                originalValue = die.originalValue,
+                dropped = true,
+            }
+            droppedValues[#droppedValues + 1] = tostring(die.value)
+        end
+        print("[DiceVision] Dropped dice: " .. table.concat(droppedValues, ", "))
+    end
+    return diceForMessage, diceSum
+end
 
 postRollToChat = function(rollData)
     -- Check for percentile (d100) pair before applying standard rules
@@ -562,32 +575,7 @@ postRollToChat = function(rollData)
     end
 
     -- Standard path: apply dice rules (including 0->10 mapping for standard d10s)
-    local processedDice, droppedDice = DiceRollLogic.applyDiceRules(rollData.dice, nil)
-    local diceForMessage = {}
-    local diceSum = 0
-    for _, die in ipairs(processedDice) do
-        local faces = DiceRollLogic.getDiceFaces(die.type)
-        diceForMessage[#diceForMessage + 1] = {
-            faces = faces,
-            value = die.value,
-            originalValue = die.originalValue,
-        }
-        diceSum = diceSum + die.value
-    end
-    if droppedDice and #droppedDice > 0 then
-        local droppedValues = {}
-        for _, die in ipairs(droppedDice) do
-            local faces = DiceRollLogic.getDiceFaces(die.type)
-            diceForMessage[#diceForMessage + 1] = {
-                faces = faces,
-                value = die.value,
-                originalValue = die.originalValue,
-                dropped = true,
-            }
-            droppedValues[#droppedValues + 1] = tostring(die.value)
-        end
-        print("[DiceVision] Dropped dice: " .. table.concat(droppedValues, ", "))
-    end
+    local diceForMessage, diceSum = buildDiceMessage(rollData.dice, nil)
     local total = diceSum
     local tier = DiceRollLogic.calculateTier(total)
     local message = DiceVisionRollMessage.new{
@@ -612,37 +600,6 @@ local function showWaitingDialog()
     chat.Send("[DiceVision] Waiting for physical dice roll...")
 end
 
-hideWaitingDialog = function()
-    -- TODO: Hide the waiting indicator
-end
-
-local function postDiceVisionRollToChat(rollData, rollInfo, pendingRoll) -- luacheck: ignore
-    local modifier = DiceRollLogic.extractModifierFromRoll(pendingRoll.roll)
-    print(string.format("DV: postDiceVisionRollToChat - modifier=%d, total=%d, tier=%s",
-        modifier, rollInfo.total, tostring(rollInfo.tiers)))
-    local diceForMessage = {}
-    for _, die in ipairs(rollData.dice) do
-        local faces = DiceRollLogic.getDiceFaces(die.type)
-        diceForMessage[#diceForMessage + 1] = {
-            faces = faces,
-            value = die.value
-        }
-    end
-    local tokenid = pendingRoll.tokenid
-    if not tokenid and pendingRoll.creature then
-        tokenid = dmhub.LookupTokenId(pendingRoll.creature)
-    end
-    local message = DiceVisionRollMessage.new{
-        description = pendingRoll.description or "Roll",
-        dice = diceForMessage,
-        modifier = modifier,
-        total = rollInfo.total,
-        tier = rollInfo.tiers,
-        tokenid = tokenid,
-    }
-    chat.SendCustom(message)
-end
-
 handlePendingRoll = function(rollData)
     if not DiceVision.pendingRoll then
         return false
@@ -651,7 +608,6 @@ handlePendingRoll = function(rollData)
     DiceVision.pendingRoll = nil
     DiceVision.waitingForRoll = false
     DiceVision.currentRequestId = generateRequestId()
-    hideWaitingDialog()
 
     -- Stop polling after roll is handled (for replace mode)
     if DiceVision.mode == "replace" then
@@ -661,34 +617,7 @@ handlePendingRoll = function(rollData)
     local modifier = DiceRollLogic.extractModifierFromRoll(pendingRoll.originalRoll)
     print(string.format("DV: handlePendingRoll - originalRoll='%s', modifier=%d",
         tostring(pendingRoll.originalRoll), modifier))
-    local diceSum = 0
-    local processedDice, droppedDice = DiceRollLogic.applyDiceRules(rollData.dice, pendingRoll)
-    local diceForMessage = {}
-    for i, die in ipairs(processedDice) do
-        local faces = DiceRollLogic.getDiceFaces(die.type)
-        diceSum = diceSum + die.value
-        diceForMessage[i] = {
-            faces = faces,
-            value = die.value,
-            originalValue = die.originalValue,
-        }
-    end
-    print(string.format("DV: handlePendingRoll - diceSum=%d, processedDice=%d, droppedDice=%d",
-        diceSum, #processedDice, droppedDice and #droppedDice or 0))
-    if droppedDice and #droppedDice > 0 then
-        local droppedValues = {}
-        for _, die in ipairs(droppedDice) do
-            local faces = DiceRollLogic.getDiceFaces(die.type)
-            diceForMessage[#diceForMessage + 1] = {
-                faces = faces,
-                value = die.value,
-                originalValue = die.originalValue,
-                dropped = true,
-            }
-            droppedValues[#droppedValues + 1] = tostring(die.value)
-        end
-        print("[DiceVision] Dropped dice: " .. table.concat(droppedValues, ", "))
-    end
+    local diceForMessage, diceSum = buildDiceMessage(rollData.dice, pendingRoll)
 
     local edges = pendingRoll.edges or 0
     local banes = pendingRoll.banes or 0
@@ -728,7 +657,7 @@ handlePendingRoll = function(rollData)
             pendingRoll.setActiveRoll(pendingRoll.activeRoll)
         end
         chat.SendCustom(visualMessage)
-        pendingRoll.amendWithResult(tostring(baseTotal))
+        pendingRoll.amendWithResult(tostring(finalTotal))
         return true
     end
 
@@ -791,34 +720,6 @@ handlePendingRoll = function(rollData)
     return true
 end
 
-checkRollTimeout = function() -- luacheck: ignore
-    if DiceVision.waitingForRoll then
-        local elapsed = (dmhub.Time() * 1000) - DiceVision.rollStartTime
-        if elapsed > DiceVision.rollTimeout then
-            chat.Send("[DiceVision] Timeout waiting for physical dice. Roll cancelled - try again.")
-            DiceVision.waitingForRoll = false
-            DiceVision.pendingRoll = nil
-            DiceVision.currentRequestId = generateRequestId()
-            hideWaitingDialog()
-
-            -- Stop polling on timeout (for replace mode)
-            if DiceVision.mode == "replace" then
-                stopPolling()
-            end
-        end
-    end
-
-    -- Panel roll timeout
-    if DiceVision.panelWaitingForRoll then
-        local elapsed = (dmhub.Time() * 1000) - DiceVision.panelPollStartTime
-        if elapsed > DiceVision.rollTimeout then
-            chat.Send("[DiceVision] Timeout waiting for dice. Try again.")
-            DiceVision.panelWaitingForRoll = false
-            DiceVision.panelRequestId = generateRequestId()
-        end
-    end
-end
-
 removeRollInterceptor = function()
     DiceVision.pendingRoll = nil
     DiceVision.waitingForRoll = false
@@ -862,22 +763,7 @@ DiceVision.setMode = function(newMode)
 
     if newMode == "off" then
         -- If a pending ability roll exists, fall back to virtual dice
-        if DiceVision.waitingForRoll and DiceVision.pendingRoll then
-            local pendingRoll = DiceVision.pendingRoll
-            local rollArgs = pendingRoll.rollArgs
-            DiceVision.waitingForRoll = false
-            DiceVision.pendingRoll = nil
-            DiceVision.currentRequestId = generateRequestId()
-            hideWaitingDialog()
-            if pendingRoll.isReroll and pendingRoll.amendWithResult then
-                if pendingRoll.setActiveRoll and pendingRoll.activeRoll then
-                    pendingRoll.setActiveRoll(pendingRoll.activeRoll)
-                end
-                pendingRoll.amendWithResult(pendingRoll.originalRoll)
-            elseif rollArgs then
-                dmhub.Roll(rollArgs)
-            end
-        end
+        abandonPendingRoll()
         stopPolling()
         removeRollInterceptor()
     elseif newMode == "replace" then
@@ -1182,7 +1068,7 @@ onReroll = function(hookData)
     end
 
     print(string.format("DV: onReroll - originalRoll='%s', description='%s'",
-        tostring(hookData.originalRoll), tostring(hookData.description)))
+        tostring(hookData.originalRoll), tostring(hookData.rollArgs and hookData.rollArgs.description)))
 
     local edges, banes = DiceRollLogic.ParseBoonsFromRollString(hookData.originalRoll)
 

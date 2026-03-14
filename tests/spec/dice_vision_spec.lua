@@ -729,7 +729,7 @@ describe("DiceVision", function()
     -- ============================================================================
 
     describe("handlePendingRoll re-roll path", function()
-        it("calls amendWithResult with baseTotal (not finalTotal) for re-rolls", function()
+        it("calls amendWithResult with finalTotal for re-rolls", function()
             DiceVision.mode = "replace"
             DiceVision.connected = true
             DiceVision.sessionCode = "TEST"
@@ -777,7 +777,7 @@ describe("DiceVision", function()
             assert.are.equal(0, #_G._dmhubRollLog)
         end)
 
-        it("passes baseTotal without edge modifier for re-rolls (edges applied by Codex)", function()
+        it("passes finalTotal with edge modifier for re-rolls", function()
             DiceVision.mode = "replace"
             DiceVision.connected = true
             DiceVision.sessionCode = "TEST"
@@ -812,8 +812,8 @@ describe("DiceVision", function()
             DiceVision.startPolling()
             net.Get = originalNetGet
 
-            -- baseTotal = 7+3+5 = 15 (edge mod NOT included; Codex Amend applies it)
-            assert.are.equal("15", amendCalled)
+            -- finalTotal = 7+3+5+2 = 17 (edge mod +2 included)
+            assert.are.equal("17", amendCalled)
         end)
 
         it("calls setActiveRoll before amendWithResult for re-rolls", function()

@@ -111,7 +111,7 @@ local DiceVision = {
     baseUrl = "https://dicevision.dirtyowlbear.com",
     sessionCode = nil,
     connected = false,
-    mode = "off",  -- "off", "chat", or "replace"
+    mode = "off",  -- "off" or "replace"
     isPolling = false,
     pollIntervalMs = 500,
     pendingRoll = nil,
@@ -141,7 +141,12 @@ DiceVision.pendingRoll = {
     description = context.description,
     edges = edges,                    -- From SplitBoons or ParseBoonsFromRollString
     banes = banes,
-    multitargets = context.multitargets
+    multitargets = context.multitargets,
+    setActiveRoll = context.setActiveRoll,  -- Callback to set active roll on dialog
+    -- Re-roll only fields (set by onReroll, nil for initial rolls):
+    isReroll = nil,                   -- true when this is a re-roll
+    amendWithResult = nil,            -- Callback: amendWithResult(totalString)
+    activeRoll = nil,                 -- Original roll object to restore before amend
 }
 ```
 
@@ -160,7 +165,32 @@ end
 
 **Fallback for boons reset issue:** If `context.boons == 0` but roll string contains "1 edge" or "2 bane", parses from string (handles boonBar.prepare reset).
 
-#### handlePendingRoll (Lines 658-790)
+#### onReroll Callback (registered on RollDialog.OnReroll)
+
+The `RollDialog.OnReroll` hook is called when a player clicks the re-roll button on an existing roll result. DiceVision intercepts re-rolls the same way it intercepts initial rolls.
+
+**Hook data from DSRollDialog:**
+```lua
+hookData = {
+    originalRoll = rollString,       -- The original roll expression (e.g., "2d10+5")
+    rollArgs = rollArgs,             -- Full rollArgs table (contains .description, .boons, etc.)
+    amendWithResult = function(val), -- Callback: pass new total as string to amend the roll
+    activeRoll = rollObject,         -- The original active roll object
+    setActiveRoll = function(roll),  -- Callback to restore g_activeRoll before amend
+}
+```
+
+**Re-roll flow:**
+1. `onReroll` intercepts, stores `pendingRoll` with `isReroll=true`
+2. Physical dice arrive, `handlePendingRoll` processes them
+3. Re-roll path: calls `setActiveRoll(activeRoll)` to restore the roll context
+4. Sends `DiceVisionRollMessage` to chat (visual display)
+5. Calls `amendWithResult(tostring(finalTotal))` to update the roll result
+6. Unlike initial rolls, does NOT call `dmhub.Roll()` -- the amend engine handles it
+
+**Important:** `amendWithResult` receives `finalTotal` (with edge/bane modifier applied), because the Codex amend engine does NOT re-apply edge/bane modifiers.
+
+#### handlePendingRoll
 
 **Two code paths based on targeting:**
 
@@ -253,7 +283,7 @@ Edges and banes cancel 1-for-1. Apply rules based on net (edges - banes):
 | `/dv connect <code>` | Connect to DiceVision session |
 | `/dv disconnect` | Disconnect from session |
 | `/dv status` | Show connection status |
-| `/dv mode <off\|chat\|replace>` | Set operation mode |
+| `/dv mode <off\|replace>` | Set operation mode |
 | `/dv rules <subcommand>` | Configure dice processing rules |
 | `/dv test` | Test API connection |
 
