@@ -75,7 +75,7 @@ _G.loadDiceVision = function()
 
     -- dmhub stubs (load-time + runtime)
     dmhub.GetModLoading = function() return {} end
-    dmhub.Roll = function(rollArgs) table.insert(_G._dmhubRollLog, rollArgs) end
+    dmhub.Roll = function(rollArgs) table.insert(_G._dmhubRollLog, rollArgs); return {id = "roll-" .. #_G._dmhubRollLog} end
     dmhub.Time = function() return 0 end
     dmhub.GetDiceStyling = function() return {} end
     dmhub.GetSettingValue = function() return "" end
@@ -175,7 +175,7 @@ _G.resetDiceVisionState = function()
     RollDialog.OnReroll = false
 
     -- Reset dmhub runtime stubs
-    dmhub.Roll = function(rollArgs) table.insert(_G._dmhubRollLog, rollArgs) end
+    dmhub.Roll = function(rollArgs) table.insert(_G._dmhubRollLog, rollArgs); return {id = "roll-" .. #_G._dmhubRollLog} end
     dmhub.Time = function() return 0 end
 
     -- Clear capture logs

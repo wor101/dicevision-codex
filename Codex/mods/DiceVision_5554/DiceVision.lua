@@ -478,6 +478,9 @@ longPollForRolls = function()
                 stopPolling()
 
                 if pendingRoll and pendingRoll.isReroll and pendingRoll.amendWithResult then
+                    if pendingRoll.setActiveRoll and pendingRoll.activeRoll then
+                        pendingRoll.setActiveRoll(pendingRoll.activeRoll)
+                    end
                     pendingRoll.amendWithResult(pendingRoll.originalRoll)
                 elseif rollArgs then
                     dmhub.Roll(rollArgs)
@@ -508,6 +511,9 @@ longPollForRolls = function()
                 stopPolling()
 
                 if pendingRoll and pendingRoll.isReroll and pendingRoll.amendWithResult then
+                    if pendingRoll.setActiveRoll and pendingRoll.activeRoll then
+                        pendingRoll.setActiveRoll(pendingRoll.activeRoll)
+                    end
                     pendingRoll.amendWithResult(pendingRoll.originalRoll)
                 elseif rollArgs then
                     dmhub.Roll(rollArgs)
@@ -718,8 +724,11 @@ handlePendingRoll = function(rollData)
 
     -- Re-roll path: use amendWithResult callback instead of dmhub.Roll
     if pendingRoll.isReroll and pendingRoll.amendWithResult then
+        if pendingRoll.setActiveRoll and pendingRoll.activeRoll then
+            pendingRoll.setActiveRoll(pendingRoll.activeRoll)
+        end
         chat.SendCustom(visualMessage)
-        pendingRoll.amendWithResult(tostring(finalTotal))
+        pendingRoll.amendWithResult(tostring(baseTotal))
         return true
     end
 
@@ -775,7 +784,10 @@ handlePendingRoll = function(rollData)
         end
     end
 
-    dmhub.Roll(rollArgs)
+    local roll = dmhub.Roll(rollArgs)
+    if pendingRoll.setActiveRoll and roll then
+        pendingRoll.setActiveRoll(roll)
+    end
     return true
 end
 
@@ -858,6 +870,9 @@ DiceVision.setMode = function(newMode)
             DiceVision.currentRequestId = generateRequestId()
             hideWaitingDialog()
             if pendingRoll.isReroll and pendingRoll.amendWithResult then
+                if pendingRoll.setActiveRoll and pendingRoll.activeRoll then
+                    pendingRoll.setActiveRoll(pendingRoll.activeRoll)
+                end
                 pendingRoll.amendWithResult(pendingRoll.originalRoll)
             elseif rollArgs then
                 dmhub.Roll(rollArgs)
@@ -1133,6 +1148,7 @@ onBeforeRoll = function(context)
         edges = edges,
         banes = banes,
         multitargets = context.multitargets,
+        setActiveRoll = context.setActiveRoll,
     }
 
     DiceVision.waitingForRoll = true
@@ -1179,12 +1195,15 @@ onReroll = function(hookData)
     DiceVision.pendingRoll = {
         rollArgs = hookData.rollArgs,
         originalRoll = hookData.originalRoll,
-        description = hookData.description,
+        description = hookData.rollArgs and hookData.rollArgs.description,
         edges = edges,
         banes = banes,
-        multitargets = hookData.multitargets,
+        multitargets = hookData.rollArgs and hookData.rollArgs.properties
+            and hookData.rollArgs.properties.multitargets,
         isReroll = true,
         amendWithResult = hookData.amendWithResult,
+        activeRoll = hookData.activeRoll,
+        setActiveRoll = hookData.setActiveRoll,
     }
 
     DiceVision.waitingForRoll = true

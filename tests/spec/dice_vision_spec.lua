@@ -589,9 +589,10 @@ describe("DiceVision", function()
             DiceVision.connected = true
             local result = onRerollFn({
                 originalRoll = "2d10+5",
-                description = "Test",
                 amendWithResult = function() end,
-                rollArgs = { roll = "2d10+5" },
+                rollArgs = { roll = "2d10+5", description = "Test" },
+                activeRoll = { id = "roll-1" },
+                setActiveRoll = function() end,
             })
             assert.is_nil(result)
         end)
@@ -601,9 +602,10 @@ describe("DiceVision", function()
             DiceVision.connected = false
             local result = onRerollFn({
                 originalRoll = "2d10+5",
-                description = "Test",
                 amendWithResult = function() end,
-                rollArgs = { roll = "2d10+5" },
+                rollArgs = { roll = "2d10+5", description = "Test" },
+                activeRoll = { id = "roll-1" },
+                setActiveRoll = function() end,
             })
             assert.is_nil(result)
         end)
@@ -614,9 +616,10 @@ describe("DiceVision", function()
             DiceVision.waitingForRoll = true
             local result = onRerollFn({
                 originalRoll = "2d10+5",
-                description = "Test",
                 amendWithResult = function() end,
-                rollArgs = { roll = "2d10+5" },
+                rollArgs = { roll = "2d10+5", description = "Test" },
+                activeRoll = { id = "roll-1" },
+                setActiveRoll = function() end,
             })
             assert.is_nil(result)
         end)
@@ -625,11 +628,14 @@ describe("DiceVision", function()
             DiceVision.mode = "replace"
             DiceVision.connected = true
             local amendFn = function() end
+            local activeRollObj = { id = "roll-1" }
+            local setActiveRollFn = function() end
             local result = onRerollFn({
                 originalRoll = "2d10+5",
-                description = "Test Reroll",
                 amendWithResult = amendFn,
-                rollArgs = { roll = "2d10+5", boons = 0 },
+                rollArgs = { roll = "2d10+5", boons = 0, description = "Test Reroll" },
+                activeRoll = activeRollObj,
+                setActiveRoll = setActiveRollFn,
             })
             assert.are.equal("intercept", result)
             assert.is_true(DiceVision.waitingForRoll)
@@ -637,6 +643,22 @@ describe("DiceVision", function()
             assert.is_true(DiceVision.pendingRoll.isReroll)
             assert.are.equal(amendFn, DiceVision.pendingRoll.amendWithResult)
             assert.are.equal("Test Reroll", DiceVision.pendingRoll.description)
+            assert.are.equal(activeRollObj, DiceVision.pendingRoll.activeRoll)
+            assert.are.equal(setActiveRollFn, DiceVision.pendingRoll.setActiveRoll)
+        end)
+
+        it("gets description from rollArgs.description, not hookData.description", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            onRerollFn({
+                originalRoll = "2d10+5",
+                -- No top-level description (matches actual DSRollDialog hookData)
+                amendWithResult = function() end,
+                rollArgs = { roll = "2d10+5", boons = 0, description = "Ability: Power Roll" },
+                activeRoll = { id = "roll-1" },
+                setActiveRoll = function() end,
+            })
+            assert.are.equal("Ability: Power Roll", DiceVision.pendingRoll.description)
         end)
 
         it("parses edges from originalRoll string", function()
@@ -644,9 +666,10 @@ describe("DiceVision", function()
             DiceVision.connected = true
             onRerollFn({
                 originalRoll = "2d10+5 1 edge",
-                description = "Test",
                 amendWithResult = function() end,
-                rollArgs = { roll = "2d10+5", boons = 0 },
+                rollArgs = { roll = "2d10+5", boons = 0, description = "Test" },
+                activeRoll = { id = "roll-1" },
+                setActiveRoll = function() end,
             })
             assert.are.equal(1, DiceVision.pendingRoll.edges)
             assert.are.equal(0, DiceVision.pendingRoll.banes)
@@ -657,9 +680,10 @@ describe("DiceVision", function()
             DiceVision.connected = true
             onRerollFn({
                 originalRoll = "2d10+5 2 banes",
-                description = "Test",
                 amendWithResult = function() end,
-                rollArgs = { roll = "2d10+5", boons = 0 },
+                rollArgs = { roll = "2d10+5", boons = 0, description = "Test" },
+                activeRoll = { id = "roll-1" },
+                setActiveRoll = function() end,
             })
             assert.are.equal(0, DiceVision.pendingRoll.edges)
             assert.are.equal(2, DiceVision.pendingRoll.banes)
@@ -670,9 +694,10 @@ describe("DiceVision", function()
             DiceVision.connected = true
             onRerollFn({
                 originalRoll = "2d10+5",
-                description = "Test",
                 amendWithResult = function() end,
-                rollArgs = { roll = "2d10+5", boons = 2 },
+                rollArgs = { roll = "2d10+5", boons = 2, description = "Test" },
+                activeRoll = { id = "roll-1" },
+                setActiveRoll = function() end,
             })
             assert.are.equal(2, DiceVision.pendingRoll.edges)
             assert.are.equal(0, DiceVision.pendingRoll.banes)
@@ -683,9 +708,10 @@ describe("DiceVision", function()
             DiceVision.connected = true
             onRerollFn({
                 originalRoll = "2d10+5",
-                description = "Test",
                 amendWithResult = function() end,
-                rollArgs = { roll = "2d10+5", boons = 0 },
+                rollArgs = { roll = "2d10+5", boons = 0, description = "Test" },
+                activeRoll = { id = "roll-1" },
+                setActiveRoll = function() end,
             })
             local found = false
             for _, entry in ipairs(_G._chatLog) do
@@ -703,11 +729,13 @@ describe("DiceVision", function()
     -- ============================================================================
 
     describe("handlePendingRoll re-roll path", function()
-        it("calls amendWithResult with finalTotal for re-rolls", function()
+        it("calls amendWithResult with baseTotal (not finalTotal) for re-rolls", function()
             DiceVision.mode = "replace"
             DiceVision.connected = true
             DiceVision.sessionCode = "TEST"
             local amendCalled = nil
+            local setActiveRollCalled = nil
+            local activeRollObj = { id = "roll-1" }
             DiceVision.pendingRoll = {
                 rollArgs = { roll = "2d10+5", creature = nil },
                 originalRoll = "2d10+5",
@@ -716,6 +744,8 @@ describe("DiceVision", function()
                 banes = 0,
                 isReroll = true,
                 amendWithResult = function(val) amendCalled = val end,
+                activeRoll = activeRollObj,
+                setActiveRoll = function(roll) setActiveRollCalled = roll end,
             }
             DiceVision.waitingForRoll = true
 
@@ -726,14 +756,6 @@ describe("DiceVision", function()
                 },
                 total = 10,
             }
-            -- handleDiceVisionRoll calls handlePendingRoll internally
-            -- We need to call handlePendingRoll via the exposed path
-            -- Since handlePendingRoll is local, trigger via handleDiceVisionRoll:
-            -- Stub net.Get is noop, so we call handleDiceVisionRoll directly
-            -- But handleDiceVisionRoll is also local. We use the pattern from
-            -- longPollForRolls: simulate a net.Get success that calls handleDiceVisionRoll.
-            -- Actually, we can set up pendingRoll and trigger handleDiceVisionRoll
-            -- through the global entry point. Let's use net.Get stub to call back immediately.
             local originalNetGet = net.Get
             net.Get = function(args)
                 if args.success then
@@ -743,20 +765,19 @@ describe("DiceVision", function()
                 end
             end
 
-            -- Trigger polling which will call net.Get -> success -> handleDiceVisionRoll
             DiceVision.isPolling = false
             DiceVision.startPolling()
 
             net.Get = originalNetGet
 
-            -- amendWithResult should have been called with the total (7+3+5 = 15)
+            -- baseTotal = 7+3+5 = 15 (no edge/bane mod applied)
             assert.is_not_nil(amendCalled)
             assert.are.equal("15", amendCalled)
             -- dmhub.Roll should NOT have been called
             assert.are.equal(0, #_G._dmhubRollLog)
         end)
 
-        it("includes edge modifier in finalTotal for re-rolls", function()
+        it("passes baseTotal without edge modifier for re-rolls (edges applied by Codex)", function()
             DiceVision.mode = "replace"
             DiceVision.connected = true
             DiceVision.sessionCode = "TEST"
@@ -769,6 +790,8 @@ describe("DiceVision", function()
                 banes = 0,
                 isReroll = true,
                 amendWithResult = function(val) amendCalled = val end,
+                activeRoll = { id = "roll-1" },
+                setActiveRoll = function() end,
             }
             DiceVision.waitingForRoll = true
 
@@ -789,8 +812,52 @@ describe("DiceVision", function()
             DiceVision.startPolling()
             net.Get = originalNetGet
 
-            -- 7+3 = 10 dice, +5 modifier, +2 edge mod = 17
-            assert.are.equal("17", amendCalled)
+            -- baseTotal = 7+3+5 = 15 (edge mod NOT included; Codex Amend applies it)
+            assert.are.equal("15", amendCalled)
+        end)
+
+        it("calls setActiveRoll before amendWithResult for re-rolls", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            local callOrder = {}
+            local activeRollObj = { id = "roll-1" }
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Re-roll Order Test",
+                edges = 0,
+                banes = 0,
+                isReroll = true,
+                amendWithResult = function() table.insert(callOrder, "amend") end,
+                activeRoll = activeRollObj,
+                setActiveRoll = function(roll)
+                    table.insert(callOrder, "setActiveRoll")
+                    assert.are.equal(activeRollObj, roll)
+                end,
+            }
+            DiceVision.waitingForRoll = true
+
+            local rollData = {
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            }
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            assert.are.equal(2, #callOrder)
+            assert.are.equal("setActiveRoll", callOrder[1])
+            assert.are.equal("amend", callOrder[2])
         end)
 
         it("sends DiceVisionRollMessage to chat for re-rolls", function()
@@ -805,6 +872,8 @@ describe("DiceVision", function()
                 banes = 0,
                 isReroll = true,
                 amendWithResult = function() end,
+                activeRoll = { id = "roll-1" },
+                setActiveRoll = function() end,
             }
             DiceVision.waitingForRoll = true
 
@@ -876,11 +945,12 @@ describe("DiceVision", function()
     -- ============================================================================
 
     describe("fallback paths for re-rolls", function()
-        it("timeout calls amendWithResult(originalRoll) for re-rolls", function()
+        it("timeout calls setActiveRoll then amendWithResult(originalRoll) for re-rolls", function()
             DiceVision.mode = "replace"
             DiceVision.connected = true
             DiceVision.sessionCode = "TEST"
-            local amendCalled = nil
+            local callOrder = {}
+            local activeRollObj = { id = "roll-1" }
             DiceVision.pendingRoll = {
                 rollArgs = { roll = "2d10+5" },
                 originalRoll = "2d10+5",
@@ -888,7 +958,9 @@ describe("DiceVision", function()
                 edges = 0,
                 banes = 0,
                 isReroll = true,
-                amendWithResult = function(val) amendCalled = val end,
+                amendWithResult = function(val) table.insert(callOrder, {fn = "amend", val = val}) end,
+                activeRoll = activeRollObj,
+                setActiveRoll = function(roll) table.insert(callOrder, {fn = "setActiveRoll", val = roll}) end,
             }
             DiceVision.waitingForRoll = true
 
@@ -903,15 +975,20 @@ describe("DiceVision", function()
             DiceVision.startPolling()
             net.Get = originalNetGet
 
-            assert.are.equal("2d10+5", amendCalled)
+            assert.are.equal(2, #callOrder)
+            assert.are.equal("setActiveRoll", callOrder[1].fn)
+            assert.are.equal(activeRollObj, callOrder[1].val)
+            assert.are.equal("amend", callOrder[2].fn)
+            assert.are.equal("2d10+5", callOrder[2].val)
             assert.are.equal(0, #_G._dmhubRollLog)
         end)
 
-        it("error calls amendWithResult(originalRoll) for re-rolls", function()
+        it("error calls setActiveRoll then amendWithResult(originalRoll) for re-rolls", function()
             DiceVision.mode = "replace"
             DiceVision.connected = true
             DiceVision.sessionCode = "TEST"
-            local amendCalled = nil
+            local callOrder = {}
+            local activeRollObj = { id = "roll-1" }
             DiceVision.pendingRoll = {
                 rollArgs = { roll = "2d10+5" },
                 originalRoll = "2d10+5",
@@ -919,7 +996,9 @@ describe("DiceVision", function()
                 edges = 0,
                 banes = 0,
                 isReroll = true,
-                amendWithResult = function(val) amendCalled = val end,
+                amendWithResult = function(val) table.insert(callOrder, {fn = "amend", val = val}) end,
+                activeRoll = activeRollObj,
+                setActiveRoll = function(roll) table.insert(callOrder, {fn = "setActiveRoll", val = roll}) end,
             }
             DiceVision.waitingForRoll = true
 
@@ -934,14 +1013,19 @@ describe("DiceVision", function()
             DiceVision.startPolling()
             net.Get = originalNetGet
 
-            assert.are.equal("2d10+5", amendCalled)
+            assert.are.equal(2, #callOrder)
+            assert.are.equal("setActiveRoll", callOrder[1].fn)
+            assert.are.equal(activeRollObj, callOrder[1].val)
+            assert.are.equal("amend", callOrder[2].fn)
+            assert.are.equal("2d10+5", callOrder[2].val)
             assert.are.equal(0, #_G._dmhubRollLog)
         end)
 
-        it("mode-off calls amendWithResult(originalRoll) for re-rolls", function()
+        it("mode-off calls setActiveRoll then amendWithResult(originalRoll) for re-rolls", function()
             DiceVision.mode = "replace"
             DiceVision.connected = true
-            local amendCalled = nil
+            local callOrder = {}
+            local activeRollObj = { id = "roll-1" }
             DiceVision.pendingRoll = {
                 rollArgs = { roll = "2d10+5" },
                 originalRoll = "2d10+5",
@@ -949,13 +1033,19 @@ describe("DiceVision", function()
                 edges = 0,
                 banes = 0,
                 isReroll = true,
-                amendWithResult = function(val) amendCalled = val end,
+                amendWithResult = function(val) table.insert(callOrder, {fn = "amend", val = val}) end,
+                activeRoll = activeRollObj,
+                setActiveRoll = function(roll) table.insert(callOrder, {fn = "setActiveRoll", val = roll}) end,
             }
             DiceVision.waitingForRoll = true
 
             DiceVision.setMode("off")
 
-            assert.are.equal("2d10+5", amendCalled)
+            assert.are.equal(2, #callOrder)
+            assert.are.equal("setActiveRoll", callOrder[1].fn)
+            assert.are.equal(activeRollObj, callOrder[1].val)
+            assert.are.equal("amend", callOrder[2].fn)
+            assert.are.equal("2d10+5", callOrder[2].val)
             assert.are.equal(0, #_G._dmhubRollLog)
         end)
 
@@ -1033,7 +1123,126 @@ describe("DiceVision", function()
     end)
 
     -- ============================================================================
-    -- Category 9: Hook Lifecycle
+    -- Category 9: onBeforeRoll stores setActiveRoll
+    -- ============================================================================
+
+    describe("onBeforeRoll setActiveRoll", function()
+        local onBeforeRollFn
+        before_each(function()
+            DiceVision.setMode("replace")
+            onBeforeRollFn = RollDialog.OnBeforeRoll
+            resetDiceVisionState()
+        end)
+
+        it("stores setActiveRoll from context in pendingRoll", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            local setActiveRollFn = function() end
+            onBeforeRollFn({
+                roll = "2d10+5",
+                description = "Test Ability",
+                boons = 0,
+                rollArgs = { roll = "2d10+5" },
+                setActiveRoll = setActiveRollFn,
+            })
+            assert.are.equal(setActiveRollFn, DiceVision.pendingRoll.setActiveRoll)
+        end)
+
+        it("works when context has no setActiveRoll", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            onBeforeRollFn({
+                roll = "2d10+5",
+                description = "Test Ability",
+                boons = 0,
+                rollArgs = { roll = "2d10+5" },
+            })
+            assert.is_nil(DiceVision.pendingRoll.setActiveRoll)
+        end)
+    end)
+
+    -- ============================================================================
+    -- Category 10: handlePendingRoll initial roll calls setActiveRoll
+    -- ============================================================================
+
+    describe("handlePendingRoll initial roll setActiveRoll", function()
+        it("calls setActiveRoll with dmhub.Roll return value", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            local setActiveRollCalled = nil
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Initial Roll Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function(roll) setActiveRollCalled = roll end,
+            }
+            DiceVision.waitingForRoll = true
+
+            local rollData = {
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            }
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            -- dmhub.Roll was called and returned a roll object
+            assert.are.equal(1, #_G._dmhubRollLog)
+            -- setActiveRoll should have been called with that roll object
+            assert.is_not_nil(setActiveRollCalled)
+            assert.are.equal("roll-1", setActiveRollCalled.id)
+        end)
+
+        it("does not call setActiveRoll when not provided", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "No SetActiveRoll Test",
+                edges = 0,
+                banes = 0,
+                -- No setActiveRoll
+            }
+            DiceVision.waitingForRoll = true
+
+            local rollData = {
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            }
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            -- Should still work without setActiveRoll
+            assert.are.equal(1, #_G._dmhubRollLog)
+        end)
+    end)
+
+    -- ============================================================================
+    -- Category 11: Hook Lifecycle
     -- ============================================================================
 
     describe("OnReroll hook lifecycle", function()
