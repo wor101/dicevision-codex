@@ -767,11 +767,8 @@ handlePendingRoll = function(rollData)
     return true
 end
 
--- Hooks DiceVision registers on RollDialog. The Lua field name on RollDialog
--- is the source of truth for whether a Codex install supports the hook -- if
--- RollDialog[name] is nil before we register, Codex never declared (and so
--- never invokes) it, and the corresponding roll type silently bypasses
--- DiceVision. Order here drives /dv status and chat-warning ordering.
+-- Hooks DiceVision registers on RollDialog. Order here drives /dv status
+-- and chat-warning ordering.
 local HOOK_SPECS = {
     { name = "OnBeforeRoll",      key = "ability", label = "ability rolls" },
     { name = "OnReroll",          key = "reroll",  label = "re-rolls" },
@@ -786,21 +783,39 @@ end
 
 -- Register hooks selectively: only assign to slots Codex declares.
 -- Caches the result on DiceVision.hooksRegistered for /dv status.
--- When verbose=true, emits a chat warning for each missing hook.
+-- When verbose=true, emits a chat warning for each missing hook;
+-- printf trail is always emitted for missing hooks so the post-mortem
+-- trail survives the silent paths (load-time, setMode internal).
+--
+-- DiceVision.codexDeclaredHooks captures Codex's original declaration
+-- state on the first call. We do NOT re-probe RollDialog on later
+-- calls because removeRollInterceptor writes false to all three slots
+-- on disconnect; a live re-probe would then misread "we cleared on
+-- disconnect" as "Codex declared this hook" and silently re-wire a
+-- slot Codex never invokes.
 local function registerHooks(verbose)
     local registered = { ability = false, reroll = false, ["table"] = false }
     if not RollDialog then
+        printf("DV: RollDialog global is nil; no hooks registered")
         if verbose then
             chat.Send("[DiceVision] Warning: RollDialog not available; physical dice will not intercept any rolls.")
         end
         DiceVision.hooksRegistered = registered
         return registered
     end
+    if DiceVision.codexDeclaredHooks == nil then
+        local snapshot = {}
+        for _, spec in ipairs(HOOK_SPECS) do
+            snapshot[spec.key] = (RollDialog[spec.name] ~= nil)
+        end
+        DiceVision.codexDeclaredHooks = snapshot
+    end
     for _, spec in ipairs(HOOK_SPECS) do
-        if RollDialog[spec.name] == nil then
+        if not DiceVision.codexDeclaredHooks[spec.key] then
+            printf("DV: hook RollDialog.%s missing; %s will use virtual dice", spec.name, spec.label)
             if verbose then
                 chat.Send(string.format(
-                    "[DiceVision] Warning: Codex does not expose RollDialog.%s; %s will use virtual dice. (Update Codex to enable.)",
+                    "[DiceVision] Warning: Codex does not expose RollDialog.%s; %s will use virtual dice. (Requires a Codex build that declares this hook.)",
                     spec.name, spec.label))
             end
         else
@@ -845,8 +860,10 @@ end
 DiceVision.startPolling = startPolling
 DiceVision.postRollToChat = postRollToChat
 
--- Public mode setter (used by /dv mode command and DVDicePanel toggle)
-DiceVision.setMode = function(newMode)
+-- Public mode setter (used by /dv mode command and DVDicePanel toggle).
+-- Pass verbose=true on user-driven transitions to "replace" so missing-hook
+-- warnings surface to chat. Internal/setup callers default to silent.
+DiceVision.setMode = function(newMode, verbose)
     if newMode ~= "off" and newMode ~= "replace" then
         return false
     end
@@ -861,10 +878,7 @@ DiceVision.setMode = function(newMode)
         stopPolling()
         removeRollInterceptor()
     elseif newMode == "replace" then
-        -- Re-register callbacks (removeRollInterceptor sets them to false).
-        -- Silent: setMode is also called from setup paths where chat warnings
-        -- would be noisy; /dv connect is the user-visible probe.
-        registerHooks(false)
+        registerHooks(verbose == true)
     end
 
     return true
@@ -947,7 +961,10 @@ Commands.dv = function(args)
         end
 
         local oldMode = DiceVision.mode
-        DiceVision.setMode(newMode)
+        -- User-driven mode change: surface missing-hook warnings on the
+        -- replace transition so the player sees the same diagnostic as
+        -- /dv connect.
+        DiceVision.setMode(newMode, newMode == "replace")
         chat.Send("[DiceVision] Mode changed: " .. oldMode .. " -> " .. newMode)
 
     elseif subcommand == "test" then

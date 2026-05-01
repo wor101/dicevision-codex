@@ -2281,6 +2281,88 @@ describe("DiceVision", function()
             assert.is_false(DiceVision.hooksRegistered.reroll)
             assert.is_false(DiceVision.hooksRegistered["table"])
         end)
+
+        it("connect -> disconnect -> connect on missing hook stays disabled", function()
+            -- Regression: removeRollInterceptor writes false to all three slots,
+            -- which would poison a live RollDialog[name]==nil probe on the next
+            -- connect. The snapshot at first call must persist across the cycle.
+            RollDialog.OnBeforeRoll = false
+            RollDialog.OnReroll = false
+            RollDialog.OnBeforeTableRoll = nil
+            local originalNetGet = stubConnectSuccess()
+            Commands.dv("connect ABC123")
+            Commands.dv("disconnect")
+            _G._chatLog = {}
+            Commands.dv("connect ABC123")
+            net.Get = originalNetGet
+
+            assert.is_true(DiceVision.hooksRegistered.ability)
+            assert.is_true(DiceVision.hooksRegistered.reroll)
+            assert.is_false(DiceVision.hooksRegistered["table"])
+            -- After the cycle, our hook is NOT installed on the originally
+            -- undeclared slot.
+            assert.are_not_equal("function", type(RollDialog.OnBeforeTableRoll))
+            -- And the warning re-fires on the second connect.
+            local warned = false
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "send" and string.find(entry.message, "OnBeforeTableRoll") then
+                    warned = true
+                    break
+                end
+            end
+            assert.is_true(warned)
+        end)
+
+        it("setMode replace -> off -> replace on missing hook stays disabled", function()
+            -- Same regression as above but via the setMode lifecycle path.
+            RollDialog.OnBeforeRoll = false
+            RollDialog.OnReroll = false
+            RollDialog.OnBeforeTableRoll = nil
+            DiceVision.setMode("replace")
+            DiceVision.setMode("off")
+            DiceVision.setMode("replace")
+
+            assert.is_true(DiceVision.hooksRegistered.ability)
+            assert.is_false(DiceVision.hooksRegistered["table"])
+            assert.are_not_equal("function", type(RollDialog.OnBeforeTableRoll))
+        end)
+
+        it("/dv mode replace fires verbose warning when slot is missing", function()
+            DiceVision.mode = "off"
+            RollDialog.OnBeforeRoll = false
+            RollDialog.OnReroll = false
+            RollDialog.OnBeforeTableRoll = nil
+            _G._chatLog = {}
+            Commands.dv("mode replace")
+
+            local warned = false
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "send"
+                    and string.find(entry.message, "Codex does not expose")
+                    and string.find(entry.message, "OnBeforeTableRoll") then
+                    warned = true
+                    break
+                end
+            end
+            assert.is_true(warned)
+        end)
+
+        it("printf log fires for missing hook even on silent path", function()
+            RollDialog.OnBeforeRoll = false
+            RollDialog.OnReroll = false
+            RollDialog.OnBeforeTableRoll = nil
+            _G._printLog = {}
+            DiceVision.setMode("replace")  -- silent (verbose=nil)
+
+            local logged = false
+            for _, line in ipairs(_G._printLog) do
+                if string.find(line, "hook RollDialog%.OnBeforeTableRoll missing") then
+                    logged = true
+                    break
+                end
+            end
+            assert.is_true(logged)
+        end)
     end)
 
     describe("/dv status hook reporting", function()

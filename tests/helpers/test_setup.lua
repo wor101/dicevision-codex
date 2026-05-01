@@ -155,6 +155,11 @@ _G.resetDiceVisionState = function()
     DiceVision.rollStartTime = 0
     DiceVision.currentRequestId = nil
 
+    -- Reset hook-probe caches so each test re-snapshots from its own
+    -- RollDialog setup (the snapshot is sticky in production by design).
+    DiceVision.codexDeclaredHooks = nil
+    DiceVision.hooksRegistered = nil
+
     -- Reset panel state
     DiceVision.panelWaitingForRoll = false
     DiceVision.panelPollStartTime = 0
