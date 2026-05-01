@@ -755,7 +755,6 @@ describe("DiceVision", function()
             DiceVision.connected = true
             DiceVision.sessionCode = "TEST"
             local amendCalled = nil
-            local setActiveRollCalled = nil
             local activeRollObj = { id = "roll-1" }
             DiceVision.pendingRoll = {
                 rollArgs = { roll = "2d10+5", creature = nil },
@@ -766,7 +765,7 @@ describe("DiceVision", function()
                 isReroll = true,
                 amendWithResult = function(val) amendCalled = val end,
                 activeRoll = activeRollObj,
-                setActiveRoll = function(roll) setActiveRollCalled = roll end,
+                setActiveRoll = function() end,
             }
             DiceVision.waitingForRoll = true
 
