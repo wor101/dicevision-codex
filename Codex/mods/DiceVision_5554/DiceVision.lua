@@ -486,8 +486,12 @@ longPollForRolls = function()
             DiceVision.isPolling = false
 
             -- Replace mode timeout: if still waiting, fall back to virtual dice
+            -- (table rolls have no virtual fallback; abandonPendingRoll emits the
+            -- table-roll-specific notice on its own).
             if DiceVision.waitingForRoll then
-                chat.Send("[DiceVision] Physical dice timeout. Falling back to virtual dice...")
+                if not (DiceVision.pendingRoll and DiceVision.pendingRoll.isTableRoll) then
+                    chat.Send("[DiceVision] Physical dice timeout. Falling back to virtual dice...")
+                end
                 abandonPendingRoll()
             end
 
@@ -503,8 +507,12 @@ longPollForRolls = function()
             DiceVision.isPolling = false
 
             -- Replace mode: fall back to virtual dice on error
+            -- (table rolls have no virtual fallback; abandonPendingRoll emits the
+            -- table-roll-specific notice on its own).
             if DiceVision.waitingForRoll then
-                chat.Send("[DiceVision] Connection error. Falling back to virtual dice...")
+                if not (DiceVision.pendingRoll and DiceVision.pendingRoll.isTableRoll) then
+                    chat.Send("[DiceVision] Connection error. Falling back to virtual dice...")
+                end
                 abandonPendingRoll()
             end
 
@@ -623,7 +631,13 @@ handlePendingRoll = function(rollData)
     local diceForMessage, diceSum = buildDiceMessage(rollData.dice, pendingRoll)
 
     -- Table-roll path: completeWithResult takes an integer; no edge/bane/tier math
-    if pendingRoll.isTableRoll and pendingRoll.completeWithResult then
+    if pendingRoll.isTableRoll then
+        if not pendingRoll.completeWithResult then
+            print(string.format("DV: ERROR - table roll missing completeWithResult; tableName='%s'",
+                tostring(pendingRoll.tableName)))
+            chat.Send("[DiceVision] Internal error: table roll callback missing. Re-trigger to retry.")
+            return false
+        end
         local percentile = DiceRollLogic.detectPercentilePair(rollData.dice)
         local total
         local isPercentile = false
@@ -847,6 +861,7 @@ Commands.dv = function(args)
         end)
 
     elseif subcommand == "disconnect" then
+        abandonPendingRoll()
         stopPolling()
         removeRollInterceptor()
         DiceVision.sessionCode = nil

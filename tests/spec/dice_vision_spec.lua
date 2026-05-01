@@ -1821,6 +1821,165 @@ describe("DiceVision", function()
             end
             assert.is_true(found)
         end)
+
+        it("/dv disconnect sends abandon notice and does not call completeWithResult", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            local completeCalled = false
+            DiceVision.pendingRoll = {
+                originalRoll = "1d100",
+                description = "Disconnect Table",
+                isTableRoll = true,
+                completeWithResult = function() completeCalled = true end,
+            }
+            DiceVision.waitingForRoll = true
+
+            Commands.dv("disconnect")
+
+            assert.is_false(completeCalled)
+            assert.are.equal(0, #_G._dmhubRollLog)
+            local found = false
+            for _, entry in ipairs(_G._chatLog) do
+                if string.find(entry.message, "abandoned") then
+                    found = true
+                    break
+                end
+            end
+            assert.is_true(found)
+        end)
+
+        it("timeout does not emit 'virtual dice' chat for table rolls", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            DiceVision.pendingRoll = {
+                originalRoll = "1d100",
+                description = "Timeout Chat Table",
+                isTableRoll = true,
+                completeWithResult = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = {} })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            for _, entry in ipairs(_G._chatLog) do
+                assert.is_nil(string.find(entry.message, "virtual dice"))
+            end
+        end)
+
+        it("error does not emit 'virtual dice' chat for table rolls", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            DiceVision.pendingRoll = {
+                originalRoll = "1d100",
+                description = "Error Chat Table",
+                isTableRoll = true,
+                completeWithResult = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.error then
+                    args.error("connection failed", 500)
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            for _, entry in ipairs(_G._chatLog) do
+                assert.is_nil(string.find(entry.message, "virtual dice"))
+            end
+        end)
+
+        it("ability-roll timeout still emits 'virtual dice' chat (regression)", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5" },
+                originalRoll = "2d10+5",
+                description = "Ability Timeout",
+                edges = 0,
+                banes = 0,
+            }
+            DiceVision.waitingForRoll = true
+
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = {} })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            local found = false
+            for _, entry in ipairs(_G._chatLog) do
+                if string.find(entry.message, "virtual dice") then
+                    found = true
+                    break
+                end
+            end
+            assert.is_true(found)
+        end)
+
+        it("isTableRoll with nil completeWithResult emits internal-error chat and does not call dmhub.Roll", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            DiceVision.pendingRoll = {
+                originalRoll = "1d100",
+                description = "Buggy Hookdata",
+                tableName = "Wild Magic",
+                isTableRoll = true,
+                completeWithResult = nil,
+            }
+            DiceVision.waitingForRoll = true
+
+            local rollData = {
+                dice = { { type = "d20", value = "14" } },
+                total = 14,
+            }
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            assert.are.equal(0, #_G._dmhubRollLog)
+            local found = false
+            for _, entry in ipairs(_G._chatLog) do
+                if string.find(entry.message, "Internal error")
+                    and string.find(entry.message, "callback missing") then
+                    found = true
+                    break
+                end
+            end
+            assert.is_true(found)
+            -- Must NOT surface the ability-roll fallthrough message
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "send" then
+                    assert.is_nil(string.find(entry.message, "Roll context not available"))
+                end
+            end
+        end)
     end)
 
     -- ============================================================================
