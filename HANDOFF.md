@@ -54,7 +54,9 @@ The hook field on `RollDialog` is declared as `false` by official Codex. DiceVis
 - `DiceVision.codexDeclaredHooks = { ability = bool, reroll = bool, ["table"] = bool }` -- captured once on the first `registerHooks` call from the live `RollDialog` state, then never re-derived. This is the load-bearing snapshot. **Never reset in production.**
 - `DiceVision.hooksRegistered = { ability = bool, reroll = bool, ["table"] = bool }` -- reflects whether each hook is currently wired. Updated by `registerHooks` and cleared by `removeRollInterceptor`. Read by `/dv status`.
 
-**Verbose vs silent paths:** `registerHooks(verbose)` emits chat warnings only when `verbose=true`. User-driven entry points (`/dv connect`, `/dv mode replace`, panel toggle) pass `true`. Internal/setup paths (load-time, hidden mode transitions) pass `false`. The `printf` trail fires unconditionally.
+**Verbose vs silent paths:** `registerHooks(verbose)` emits chat warnings only when `verbose=true`. User-driven entry points (`/dv connect`, `/dv mode replace`, panel toggle, `/dv refresh`) pass `true`. Internal/setup paths (load-time, hidden mode transitions) pass `false`. The `printf` trail fires unconditionally.
+
+**Escape hatch -- `/dv refresh`:** The snapshot is sticky on purpose, but if the user updates Codex mid-session (changing which hooks are declared) or hits a load-order anomaly that locked the snapshot all-false, `/dv refresh` nils `codexDeclaredHooks` and re-runs `registerHooks(true)`. This is the only legal way to drop the snapshot in production code; do not nil `codexDeclaredHooks` from any other site.
 
 ---
 

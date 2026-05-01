@@ -768,7 +768,9 @@ handlePendingRoll = function(rollData)
 end
 
 -- Hooks DiceVision registers on RollDialog. Order here drives /dv status
--- and chat-warning ordering.
+-- and chat-warning ordering. spec.key indexes both DiceVision.codexDeclaredHooks
+-- (the static snapshot of Codex's declarations) and DiceVision.hooksRegistered
+-- (the runtime view of which slots are currently wired) -- see registerHooks.
 local HOOK_SPECS = {
     { name = "OnBeforeRoll",      key = "ability", label = "ability rolls" },
     { name = "OnReroll",          key = "reroll",  label = "re-rolls" },
@@ -788,13 +790,16 @@ end
 -- still leave a post-mortem record.
 --
 -- DiceVision.codexDeclaredHooks is a snapshot of Codex's original
--- declaration state, captured once on the first call. We do NOT re-derive
--- it from the live RollDialog table on later calls: once we install our
--- hook functions the live table no longer reflects Codex's intent, and
--- subsequent lifecycle paths (removeRollInterceptor, setMode("off"),
--- future cleanup) write false into every slot. A live re-probe would
--- then misread "we cleared this slot ourselves" as "Codex declared this
--- hook" and silently re-wire a slot Codex never invokes.
+-- declaration state, captured once on the first call and never re-derived
+-- in production (test-reset is the only legal nilling -- see test_setup.lua).
+-- Once DiceVision installs its hook functions the live RollDialog table no
+-- longer reflects Codex's intent: any code that mutates the slots after
+-- that point (removeRollInterceptor today; any future teardown path) writes
+-- false into every slot. A live re-probe would then misread "a slot
+-- DiceVision cleared on teardown" as "Codex declared this hook" and
+-- silently re-wire a slot Codex never invokes. The /dv refresh command is
+-- the user-visible escape hatch for legitimate re-probes (e.g. after a
+-- Codex hot-reload changes which hooks are declared).
 local function registerHooks(verbose)
     local registered = { ability = false, reroll = false, ["table"] = false }
     if not RollDialog then
@@ -891,6 +896,18 @@ DiceVision.setMode = function(newMode, verbose)
     return true
 end
 
+-- Panel-toggle entry point (called from DVDicePanel.lua). Extracted from
+-- the panel click handler so this exact contract -- "compute opposite mode,
+-- pass verbose on replace, emit confirmation chat" -- has a unit-testable
+-- seam. Returns the new mode for the caller's UI update.
+DiceVision._panelToggle = function()
+    local oldMode = DiceVision.mode
+    local newMode = (oldMode == "replace") and "off" or "replace"
+    DiceVision.setMode(newMode, newMode == "replace")
+    chat.Send("[DiceVision] Mode changed: " .. oldMode .. " -> " .. newMode)
+    return newMode
+end
+
 -- ============================================================================
 -- Commands
 -- ============================================================================
@@ -959,6 +976,16 @@ Commands.dv = function(args)
         end
         chat.Send(status)
 
+    elseif subcommand == "refresh" then
+        -- Drop the cached snapshot so the next register reads RollDialog
+        -- afresh. The user-visible escape hatch for: Codex hot-reload that
+        -- changes which hooks are declared, load-order anomalies that left
+        -- DiceVision locked all-false, or any time /dv status disagrees
+        -- with what the user knows about their Codex install.
+        DiceVision.codexDeclaredHooks = nil
+        registerHooks(true)
+        chat.Send("[DiceVision] Hook probe refreshed. See /dv status for current state.")
+
     elseif subcommand == "mode" then
         local newMode = parts[2]
         if not newMode or (newMode ~= "off" and newMode ~= "replace") then
@@ -969,7 +996,7 @@ Commands.dv = function(args)
 
         local oldMode = DiceVision.mode
         if oldMode == newMode then
-            chat.Send("[DiceVision] Already in mode " .. newMode)
+            chat.Send("[DiceVision] Already in mode " .. newMode .. ". Use /dv refresh to re-probe Codex hooks.")
         else
             -- User-driven mode change: surface missing-hook warnings on the
             -- replace transition so the player sees the same diagnostic as
@@ -1121,6 +1148,7 @@ Commands.dv = function(args)
   /dv disconnect      - Disconnect from session
   /dv status          - Show connection status (includes Codex hook state)
   /dv mode <mode>     - Set mode: off or replace
+  /dv refresh         - Re-probe Codex hooks (use after Codex update)
   /dv rules           - Configure dice processing rules
   /dv test            - Test API connection
 

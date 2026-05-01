@@ -2480,17 +2480,18 @@ describe("DiceVision", function()
         end)
     end)
 
-    describe("DVDicePanel toggle (verbose contract)", function()
-        -- The panel toggle calls DiceVision.setMode(newMode, newMode == "replace");
-        -- we test by invoking setMode with verbose=true and asserting the
-        -- chat warning fires. The panel UI itself is not unit-testable here,
-        -- but the contract DiceVision exposes is.
-        it("setMode('replace', true) emits a missing-hook warning", function()
+    describe("DVDicePanel._panelToggle contract", function()
+        -- DVDicePanel.lua's click handler delegates to DiceVision._panelToggle.
+        -- Testing the helper directly (not just setMode) ensures a regression
+        -- in DVDicePanel's call site -- e.g. accidentally passing a literal
+        -- mode instead of letting the helper compute it -- is still caught.
+        it("toggle from off to replace emits missing-hook warning when slot is missing", function()
             RollDialog.OnBeforeRoll = false
             RollDialog.OnReroll = false
             RollDialog.OnBeforeTableRoll = nil
+            DiceVision.mode = "off"
             _G._chatLog = {}
-            DiceVision.setMode("replace", true)
+            DiceVision._panelToggle()
             local warned = false
             for _, entry in ipairs(_G._chatLog) do
                 if entry.type == "send"
@@ -2504,17 +2505,103 @@ describe("DiceVision", function()
             assert.is_true(warned)
         end)
 
-        it("setMode('replace', false) emits no chat warning even with missing hook", function()
+        it("toggle from replace to off emits no missing-hook warning", function()
             RollDialog.OnBeforeRoll = false
             RollDialog.OnReroll = false
             RollDialog.OnBeforeTableRoll = nil
+            DiceVision.mode = "replace"
             _G._chatLog = {}
-            DiceVision.setMode("replace", false)
+            DiceVision._panelToggle()
             for _, entry in ipairs(_G._chatLog) do
                 if entry.type == "send" then
                     assert.is_nil(string.find(entry.message, "Codex does not expose"))
                 end
             end
+        end)
+
+        it("toggle returns the new mode and emits 'Mode changed' confirmation", function()
+            DiceVision.mode = "off"
+            _G._chatLog = {}
+            local newMode = DiceVision._panelToggle()
+            assert.are.equal("replace", newMode)
+            local found = false
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "send" and string.find(entry.message, "Mode changed: off %-> replace") then
+                    found = true
+                    break
+                end
+            end
+            assert.is_true(found)
+        end)
+    end)
+
+    describe("registerHooks silent path printf contract", function()
+        -- Even when verbose=false (load-time, internal setMode), the printf
+        -- trail must still emit per missing hook so a post-mortem trail
+        -- exists. Augments the cluster above by pinning the positive printf
+        -- signal alongside the chat-silence assertion.
+        it("setMode('replace', false) still printf-logs each missing hook", function()
+            RollDialog.OnBeforeRoll = false
+            RollDialog.OnReroll = false
+            RollDialog.OnBeforeTableRoll = nil
+            _G._printLog = {}
+            DiceVision.setMode("replace", false)
+            local logged = false
+            for _, line in ipairs(_G._printLog) do
+                if string.find(line, "hook RollDialog%.OnBeforeTableRoll missing") then
+                    logged = true
+                    break
+                end
+            end
+            assert.is_true(logged)
+        end)
+    end)
+
+    describe("/dv refresh", function()
+        it("nils codexDeclaredHooks and re-runs registerHooks verbose", function()
+            -- First lock the snapshot via a register on a missing hook.
+            RollDialog.OnBeforeRoll = false
+            RollDialog.OnReroll = false
+            RollDialog.OnBeforeTableRoll = nil
+            DiceVision.setMode("replace")
+            assert.is_false(DiceVision.codexDeclaredHooks["table"])
+
+            -- Simulate Codex update declaring the hook.
+            RollDialog.OnBeforeTableRoll = false
+            _G._chatLog = {}
+            Commands.dv("refresh")
+
+            -- Snapshot should now reflect the new declaration.
+            assert.is_true(DiceVision.codexDeclaredHooks["table"])
+            assert.is_true(DiceVision.hooksRegistered["table"])
+            -- Refresh confirmation chat fires.
+            local confirmed = false
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "send" and string.find(entry.message, "Hook probe refreshed") then
+                    confirmed = true
+                    break
+                end
+            end
+            assert.is_true(confirmed)
+        end)
+
+        it("emits verbose warnings on missing hooks", function()
+            RollDialog.OnBeforeRoll = false
+            RollDialog.OnReroll = false
+            RollDialog.OnBeforeTableRoll = nil
+            DiceVision.setMode("replace")  -- locks snapshot
+            _G._chatLog = {}
+            Commands.dv("refresh")
+            -- Hook is still missing; refresh re-emits the warning.
+            local warned = false
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "send" and string.find(entry.message, "Codex does not expose")
+                    and string.find(entry.message, "OnBeforeTableRoll") then
+                    warned = true
+                    break
+                end
+            end
+            assert.is_true(warned)
         end)
     end)
 end)
