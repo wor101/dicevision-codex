@@ -445,6 +445,10 @@ abandonPendingRoll = function()
         end
         pendingRoll.amendWithResult(pendingRoll.originalRoll)
     elseif pendingRoll.isTableRoll then
+        printf("DV: table roll abandoned - tableName='%s', description='%s', originalRoll='%s', elapsedMs=%d",
+            tostring(pendingRoll.tableName), tostring(pendingRoll.description),
+            tostring(pendingRoll.originalRoll),
+            math.floor(dmhub.Time() * 1000 - (DiceVision.rollStartTime or 0)))
         chat.Send("[DiceVision] Table roll abandoned. Re-trigger to retry.")
     elseif rollArgs then
         dmhub.Roll(rollArgs)
@@ -1059,6 +1063,7 @@ onBeforeRoll = function(context)
     end
 
     if DiceVision.waitingForRoll then
+        chat.Send("[DiceVision] Another roll is in progress; this roll will use virtual dice.")
         return nil
     end
 
@@ -1111,6 +1116,7 @@ onReroll = function(hookData)
     end
 
     if DiceVision.waitingForRoll then
+        chat.Send("[DiceVision] Another roll is in progress; this roll will use virtual dice.")
         return nil
     end
 
@@ -1166,6 +1172,7 @@ onBeforeTableRoll = function(hookData)
     end
 
     if DiceVision.waitingForRoll then
+        chat.Send("[DiceVision] Another roll is in progress; this roll will use virtual dice.")
         return nil
     end
 
@@ -1176,8 +1183,6 @@ onBeforeTableRoll = function(hookData)
         originalRoll = hookData.roll,
         description = hookData.description or hookData.tableName,
         tokenid = hookData.tokenid,
-        creature = hookData.creature,
-        properties = hookData.properties,
         tableRef = hookData.tableRef,
         tableName = hookData.tableName,
         guid = hookData.guid,

@@ -624,6 +624,27 @@ describe("DiceVision", function()
             assert.is_nil(result)
         end)
 
+        it("emits bypass chat notice when already waiting for a roll", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.waitingForRoll = true
+            onRerollFn({
+                originalRoll = "2d10+5",
+                amendWithResult = function() end,
+                rollArgs = { roll = "2d10+5", description = "Test" },
+                activeRoll = { id = "roll-1" },
+                setActiveRoll = function() end,
+            })
+            local found = false
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "send" and string.find(entry.message, "Another roll is in progress") then
+                    found = true
+                    break
+                end
+            end
+            assert.is_true(found)
+        end)
+
         it("returns 'intercept' and sets pendingRoll with isReroll=true", function()
             DiceVision.mode = "replace"
             DiceVision.connected = true
@@ -1148,6 +1169,28 @@ describe("DiceVision", function()
             assert.are.equal(setActiveRollFn, DiceVision.pendingRoll.setActiveRoll)
         end)
 
+        it("emits bypass chat notice when already waiting for a roll", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.waitingForRoll = true
+            local result = onBeforeRollFn({
+                roll = "2d10+5",
+                description = "Test Ability",
+                boons = 0,
+                rollArgs = { roll = "2d10+5" },
+                setActiveRoll = function() end,
+            })
+            assert.is_nil(result)
+            local found = false
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "send" and string.find(entry.message, "Another roll is in progress") then
+                    found = true
+                    break
+                end
+            end
+            assert.is_true(found)
+        end)
+
         it("works when context has no setActiveRoll", function()
             DiceVision.mode = "replace"
             DiceVision.connected = true
@@ -1370,6 +1413,25 @@ describe("DiceVision", function()
             assert.is_nil(result)
         end)
 
+        it("emits bypass chat notice when already waiting for a roll", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.waitingForRoll = true
+            onTableRollFn({
+                roll = "1d100",
+                description = "Wild Magic",
+                completeWithResult = function() end,
+            })
+            local found = false
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "send" and string.find(entry.message, "Another roll is in progress") then
+                    found = true
+                    break
+                end
+            end
+            assert.is_true(found)
+        end)
+
         it("returns 'intercept' and sets pendingRoll with isTableRoll=true", function()
             DiceVision.mode = "replace"
             DiceVision.connected = true
@@ -1388,7 +1450,7 @@ describe("DiceVision", function()
             assert.are.equal("Wild Magic Surge", DiceVision.pendingRoll.description)
         end)
 
-        it("does not set rollArgs/multitargets/edges/banes/setActiveRoll on pendingRoll", function()
+        it("does not set isReroll/amendWithResult on pendingRoll", function()
             DiceVision.mode = "replace"
             DiceVision.connected = true
             onTableRollFn({
@@ -1396,14 +1458,10 @@ describe("DiceVision", function()
                 description = "Wild Magic",
                 completeWithResult = function() end,
             })
-            assert.is_nil(DiceVision.pendingRoll.rollArgs)
-            assert.is_nil(DiceVision.pendingRoll.multitargets)
-            assert.is_nil(DiceVision.pendingRoll.edges)
-            assert.is_nil(DiceVision.pendingRoll.banes)
-            assert.is_nil(DiceVision.pendingRoll.setActiveRoll)
-            assert.is_nil(DiceVision.pendingRoll.activeRoll)
-            assert.is_nil(DiceVision.pendingRoll.amendWithResult)
+            -- Both fields are load-bearing: abandonPendingRoll keys on isReroll
+            -- to choose its branch and reads amendWithResult from the same branch.
             assert.is_nil(DiceVision.pendingRoll.isReroll)
+            assert.is_nil(DiceVision.pendingRoll.amendWithResult)
         end)
 
         it("round-trips tokenid, tableRef, tableName, guid", function()
@@ -1560,6 +1618,80 @@ describe("DiceVision", function()
             assert.are.equal(75, captured)
         end)
 
+        it("computes percentile total when units die comes first ('5'+'70' -> 75)", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            local captured = nil
+            DiceVision.pendingRoll = {
+                originalRoll = "1d100",
+                description = "Wild Magic",
+                isTableRoll = true,
+                completeWithResult = function(val) captured = val end,
+            }
+            DiceVision.waitingForRoll = true
+
+            local rollData = {
+                dice = {
+                    { type = "d10", value = "5" },
+                    { type = "d10", value = "70" },
+                },
+                total = 75,
+            }
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            assert.are.equal(75, captured)
+        end)
+
+        it("sets isPercentile=true on chat message when percentile pair detected", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            DiceVision.pendingRoll = {
+                originalRoll = "1d100",
+                description = "Percentile Chat Test",
+                isTableRoll = true,
+                completeWithResult = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            local rollData = {
+                dice = {
+                    { type = "d10", value = "70" },
+                    { type = "d10", value = "5" },
+                },
+                total = 75,
+            }
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            local found = false
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "custom"
+                    and entry.message.description == "Percentile Chat Test"
+                    and entry.message.isPercentile == true then
+                    found = true
+                    break
+                end
+            end
+            assert.is_true(found)
+        end)
+
         it("applies modifier from originalRoll string (1d20+3 -> 13)", function()
             DiceVision.mode = "replace"
             DiceVision.connected = true
@@ -1588,6 +1720,36 @@ describe("DiceVision", function()
             net.Get = originalNetGet
 
             assert.are.equal(13, captured)
+        end)
+
+        it("applies negative modifier from originalRoll (1d20-2 -> 8 from value 10)", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            local captured = nil
+            DiceVision.pendingRoll = {
+                originalRoll = "1d20-2",
+                description = "Negative Modifier Table",
+                isTableRoll = true,
+                completeWithResult = function(val) captured = val end,
+            }
+            DiceVision.waitingForRoll = true
+
+            local rollData = {
+                dice = { { type = "d20", value = 10 } },
+                total = 10,
+            }
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            assert.are.equal(8, captured)
         end)
 
         it("does NOT call dmhub.Roll for table rolls", function()

@@ -152,7 +152,7 @@ DiceVision.pendingRoll = {
     completeWithResult = nil,         -- Callback: completeWithResult(totalInteger)
     tableRef = nil,                   -- Codex table reference passed by hook
     tableName = nil,
-    tokenid = nil,
+    tokenid = nil,                    -- For table rolls only; ability rolls use rollArgs.tokenid
     guid = nil,
 }
 ```
@@ -220,7 +220,7 @@ Note the shape differs from `OnBeforeRoll` / `OnReroll`: there is no `boons`, `b
 
 **Table-roll flow:**
 1. `onBeforeTableRoll` intercepts, stores `pendingRoll` with `isTableRoll=true`
-2. Physical dice arrive, `handlePendingRoll` table-roll branch runs first (before the `rollArgs` guard)
+2. Physical dice arrive; `handlePendingRoll` enters the table-roll branch (must run before the ability-roll dispatcher because that path requires `rollArgs`, which table rolls do not carry)
 3. Detects d100 percentile pair via `DiceRollLogic.detectPercentilePair` (handles "00"+"0" -> 100 case)
 4. Sends `DiceVisionRollMessage` to chat with `rollSource="table"`
 5. Calls `completeWithResult(total)` -- `total` is an **integer**, not a string (different from `amendWithResult`)
