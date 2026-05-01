@@ -2482,10 +2482,13 @@ describe("DiceVision", function()
 
     describe("DVDicePanel._panelToggle contract", function()
         -- DVDicePanel.lua's click handler delegates to DiceVision._panelToggle.
-        -- Testing the helper directly (not just setMode) ensures a regression
-        -- in DVDicePanel's call site -- e.g. accidentally passing a literal
-        -- mode instead of letting the helper compute it -- is still caught.
+        -- Testing the helper directly pins the panel's actual contract
+        -- (verbose-on-replace, confirmation chat, mode flip, connected
+        -- guard) rather than the looser setMode surface that contract is
+        -- built on. Catches regressions where DVDicePanel reverts to
+        -- calling setMode directly and skips the verbose flag.
         it("toggle from off to replace emits missing-hook warning when slot is missing", function()
+            DiceVision.connected = true
             RollDialog.OnBeforeRoll = false
             RollDialog.OnReroll = false
             RollDialog.OnBeforeTableRoll = nil
@@ -2506,6 +2509,7 @@ describe("DiceVision", function()
         end)
 
         it("toggle from replace to off emits no missing-hook warning", function()
+            DiceVision.connected = true
             RollDialog.OnBeforeRoll = false
             RollDialog.OnReroll = false
             RollDialog.OnBeforeTableRoll = nil
@@ -2520,6 +2524,7 @@ describe("DiceVision", function()
         end)
 
         it("toggle returns the new mode and emits 'Mode changed' confirmation", function()
+            DiceVision.connected = true
             DiceVision.mode = "off"
             _G._chatLog = {}
             local newMode = DiceVision._panelToggle()
@@ -2532,6 +2537,16 @@ describe("DiceVision", function()
                 end
             end
             assert.is_true(found)
+        end)
+
+        it("toggle is a no-op when not connected", function()
+            DiceVision.connected = false
+            DiceVision.mode = "off"
+            _G._chatLog = {}
+            local result = DiceVision._panelToggle()
+            assert.is_nil(result)
+            assert.are.equal("off", DiceVision.mode)
+            assert.are.equal(0, #_G._chatLog)
         end)
     end)
 
@@ -2602,6 +2617,63 @@ describe("DiceVision", function()
                 end
             end
             assert.is_true(warned)
+        end)
+
+        it("recovers from locked-all-false when RollDialog appears later", function()
+            -- Simulate the load-order anomaly: RollDialog absent at first
+            -- probe, snapshot locked all-false, RollDialog later loads with
+            -- valid hooks. /dv refresh is the documented escape hatch.
+            local savedRollDialog = _G.RollDialog
+            _G.RollDialog = nil
+            DiceVision.codexDeclaredHooks = nil
+            DiceVision.setMode("off")
+            DiceVision.setMode("replace")  -- locks snapshot to all-false
+            assert.is_false(DiceVision.codexDeclaredHooks.ability)
+
+            -- RollDialog appears with all hooks declared.
+            _G.RollDialog = { OnBeforeRoll = false, OnReroll = false, OnBeforeTableRoll = false }
+            Commands.dv("refresh")
+
+            -- Snapshot now reflects the new declarations and hooks wire.
+            assert.is_true(DiceVision.codexDeclaredHooks.ability)
+            assert.is_true(DiceVision.codexDeclaredHooks.reroll)
+            assert.is_true(DiceVision.codexDeclaredHooks["table"])
+            assert.is_true(DiceVision.hooksRegistered.ability)
+
+            _G.RollDialog = savedRollDialog
+        end)
+
+        it("reflects a hook that Codex stopped declaring", function()
+            -- Inverse hot-reload: a hook that was previously wired is now
+            -- no longer declared. /dv refresh must update both the snapshot
+            -- and the wired-state cache.
+            RollDialog.OnBeforeRoll = false
+            RollDialog.OnReroll = false
+            RollDialog.OnBeforeTableRoll = false
+            DiceVision.setMode("replace")
+            assert.is_true(DiceVision.codexDeclaredHooks["table"])
+            assert.is_true(DiceVision.hooksRegistered["table"])
+
+            -- Codex hot-removes the hook entirely.
+            RollDialog.OnBeforeTableRoll = nil
+            Commands.dv("refresh")
+
+            assert.is_false(DiceVision.codexDeclaredHooks["table"])
+            assert.is_false(DiceVision.hooksRegistered["table"])
+        end)
+
+        it("emits printf audit-trail line on invocation", function()
+            DiceVision.setMode("replace")  -- some prior state
+            _G._printLog = {}
+            Commands.dv("refresh")
+            local logged = false
+            for _, line in ipairs(_G._printLog) do
+                if string.find(line, "/dv refresh invoked") then
+                    logged = true
+                    break
+                end
+            end
+            assert.is_true(logged)
         end)
     end)
 end)
