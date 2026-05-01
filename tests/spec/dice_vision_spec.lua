@@ -2543,10 +2543,21 @@ describe("DiceVision", function()
             DiceVision.connected = false
             DiceVision.mode = "off"
             _G._chatLog = {}
+            _G._printLog = {}
             local result = DiceVision._panelToggle()
             assert.is_nil(result)
             assert.are.equal("off", DiceVision.mode)
             assert.are.equal(0, #_G._chatLog)
+            -- Audit trail: silent on chat, but the disconnected-bypass is
+            -- logged so a future caller (hotkey, dev console) leaves a trail.
+            local logged = false
+            for _, line in ipairs(_G._printLog) do
+                if string.find(line, "_panelToggle called while disconnected") then
+                    logged = true
+                    break
+                end
+            end
+            assert.is_true(logged)
         end)
     end)
 

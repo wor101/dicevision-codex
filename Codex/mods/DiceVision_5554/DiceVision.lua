@@ -900,11 +900,15 @@ end
 -- the panel click handler so this exact contract -- "compute opposite mode,
 -- pass verbose on replace, emit confirmation chat" -- has a unit-testable
 -- seam. Guards on DiceVision.connected internally so any future caller
--- (hotkey, dev console, refactored panel) cannot silently bypass the
--- precondition. Returns the new mode for tests to assert toggle direction
--- without re-reading DiceVision.mode; production callers ignore it.
+-- cannot silently bypass the precondition. Returns the new mode for tests
+-- to assert toggle direction without re-reading DiceVision.mode; the panel
+-- currently ignores it. If a UI caller starts consuming this, treat as
+-- load-bearing public API.
 DiceVision._panelToggle = function()
-    if not DiceVision.connected then return nil end
+    if not DiceVision.connected then
+        printf("DV: _panelToggle called while disconnected; ignoring")
+        return nil
+    end
     local oldMode = DiceVision.mode
     local newMode = (oldMode == "replace") and "off" or "replace"
     DiceVision.setMode(newMode, newMode == "replace")
@@ -982,11 +986,11 @@ Commands.dv = function(args)
 
     elseif subcommand == "refresh" then
         -- Drop the cached snapshot so the next register reads RollDialog
-        -- afresh. The user-visible escape hatch for two specific failure
-        -- modes: (1) Codex hot-reload changes which hooks are declared,
-        -- (2) RollDialog was nil at first probe (load-order anomaly), so
-        -- the snapshot is locked all-false until we re-derive it.
-        printf("DV: /dv refresh invoked; clearing codexDeclaredHooks snapshot")
+        -- afresh. The user-visible escape hatch for two failure shapes:
+        -- (1) Codex hot-reload changes which hooks are declared,
+        -- (2) snapshot was locked all-false at first probe (RollDialog nil,
+        -- or RollDialog present but no hook slots declared yet).
+        printf("DV: /dv refresh invoked")
         DiceVision.codexDeclaredHooks = nil
         registerHooks(true)
         chat.Send("[DiceVision] Hook probe refreshed. See /dv status for current state.")
