@@ -2187,4 +2187,145 @@ describe("DiceVision", function()
             assert.is_function(RollDialog.OnBeforeTableRoll)
         end)
     end)
+
+    -- ============================================================================
+    -- Category 16: Hook probe & graceful degradation
+    -- ============================================================================
+
+    describe("registerHooks selective registration", function()
+        local function stubConnectSuccess()
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then args.success({ active = true }) end
+            end
+            return originalNetGet
+        end
+
+        it("wires all three hooks when Codex declares all three", function()
+            RollDialog.OnBeforeRoll = false
+            RollDialog.OnReroll = false
+            RollDialog.OnBeforeTableRoll = false
+            DiceVision.setMode("replace")
+            assert.is_function(RollDialog.OnBeforeRoll)
+            assert.is_function(RollDialog.OnReroll)
+            assert.is_function(RollDialog.OnBeforeTableRoll)
+            assert.is_true(DiceVision.hooksRegistered.ability)
+            assert.is_true(DiceVision.hooksRegistered.reroll)
+            assert.is_true(DiceVision.hooksRegistered["table"])
+        end)
+
+        it("skips slots Codex did not declare (nil) and leaves them nil", function()
+            RollDialog.OnBeforeRoll = false
+            RollDialog.OnReroll = false
+            RollDialog.OnBeforeTableRoll = nil
+            DiceVision.setMode("replace")
+            assert.is_function(RollDialog.OnBeforeRoll)
+            assert.is_function(RollDialog.OnReroll)
+            assert.is_nil(RollDialog.OnBeforeTableRoll)
+            assert.is_true(DiceVision.hooksRegistered.ability)
+            assert.is_true(DiceVision.hooksRegistered.reroll)
+            assert.is_false(DiceVision.hooksRegistered["table"])
+        end)
+
+        it("setMode('replace') registration is silent (no chat warnings)", function()
+            RollDialog.OnBeforeTableRoll = nil
+            DiceVision.setMode("replace")
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "send" then
+                    assert.is_nil(string.find(entry.message, "Codex does not expose"))
+                end
+            end
+        end)
+
+        it("/dv connect emits a chat warning per missing hook", function()
+            RollDialog.OnBeforeRoll = false
+            RollDialog.OnReroll = nil
+            RollDialog.OnBeforeTableRoll = nil
+            local originalNetGet = stubConnectSuccess()
+            Commands.dv("connect ABC123")
+            net.Get = originalNetGet
+
+            local rerollWarn, tableWarn, abilityWarn = false, false, false
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "send" and string.find(entry.message, "Codex does not expose") then
+                    if string.find(entry.message, "OnReroll") then rerollWarn = true end
+                    if string.find(entry.message, "OnBeforeTableRoll") then tableWarn = true end
+                    if string.find(entry.message, "OnBeforeRoll;") then abilityWarn = true end
+                end
+            end
+            assert.is_true(rerollWarn)
+            assert.is_true(tableWarn)
+            assert.is_false(abilityWarn)
+        end)
+
+        it("/dv connect emits no warnings when all hooks declared", function()
+            RollDialog.OnBeforeRoll = false
+            RollDialog.OnReroll = false
+            RollDialog.OnBeforeTableRoll = false
+            local originalNetGet = stubConnectSuccess()
+            Commands.dv("connect ABC123")
+            net.Get = originalNetGet
+
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "send" then
+                    assert.is_nil(string.find(entry.message, "Codex does not expose"))
+                end
+            end
+        end)
+
+        it("removeRollInterceptor clears hooksRegistered cache", function()
+            DiceVision.setMode("replace")
+            assert.is_true(DiceVision.hooksRegistered.ability)
+            Commands.dv("disconnect")
+            assert.is_false(DiceVision.hooksRegistered.ability)
+            assert.is_false(DiceVision.hooksRegistered.reroll)
+            assert.is_false(DiceVision.hooksRegistered["table"])
+        end)
+    end)
+
+    describe("/dv status hook reporting", function()
+        local function findStatusMessage()
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "send" and string.find(entry.message, "%[DiceVision%] Status:") then
+                    return entry.message
+                end
+            end
+            return nil
+        end
+
+        it("reports YES for all three hooks when wired", function()
+            DiceVision.setMode("replace")
+            _G._chatLog = {}
+            Commands.dv("status")
+            local msg = findStatusMessage()
+            assert.is_not_nil(msg)
+            assert.truthy(string.find(msg, "ability=YES"))
+            assert.truthy(string.find(msg, "reroll=YES"))
+            assert.truthy(string.find(msg, "table=YES"))
+            assert.is_nil(string.find(msg, "Missing Codex hooks"))
+        end)
+
+        it("reports NO for missing hooks and lists them", function()
+            RollDialog.OnBeforeTableRoll = nil
+            DiceVision.setMode("replace")
+            _G._chatLog = {}
+            Commands.dv("status")
+            local msg = findStatusMessage()
+            assert.is_not_nil(msg)
+            assert.truthy(string.find(msg, "ability=YES"))
+            assert.truthy(string.find(msg, "table=NO"))
+            assert.truthy(string.find(msg, "Missing Codex hooks: RollDialog%.OnBeforeTableRoll"))
+        end)
+
+        it("reports all NO and full missing list before any registration", function()
+            DiceVision.hooksRegistered = nil
+            _G._chatLog = {}
+            Commands.dv("status")
+            local msg = findStatusMessage()
+            assert.is_not_nil(msg)
+            assert.truthy(string.find(msg, "ability=NO"))
+            assert.truthy(string.find(msg, "reroll=NO"))
+            assert.truthy(string.find(msg, "table=NO"))
+        end)
+    end)
 end)

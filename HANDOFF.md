@@ -36,6 +36,24 @@ C# engine processes roll with correct tier/damage
 
 ---
 
+## Codex Hook Requirements & Graceful Degradation
+
+DiceVision registers three callbacks on `RollDialog`:
+
+| Hook | Roll type | Declared in Codex (file:line) |
+|---|---|---|
+| `RollDialog.OnBeforeRoll` | Ability rolls | `Draw Steel UI/DSRollDialog.lua:11` (declaration), `:3308-3309` (call site) |
+| `RollDialog.OnReroll` | Re-rolls | `Draw Steel UI/DSRollDialog.lua:12` (declaration), `:2211-2212` (call site) |
+| `RollDialog.OnBeforeTableRoll` | Random table lookups | `Draw Steel UI/DSRollDialog.lua:13` (declaration), `DMHub Game Hud/RollOnTableDialog.lua:181-211` (call site) |
+
+The hook field on `RollDialog` is declared as `false` by official Codex. DiceVision uses `RollDialog[hookName] == nil` as the probe: if the field is `nil` before we register, Codex never declared (and so never invokes) it, and that roll type silently bypasses DiceVision.
+
+**Graceful degradation:** DiceVision registers selectively -- only assigning a callback to slots Codex declares. Missing hooks fall back to virtual dice for that roll type only; other roll types are unaffected. On `/dv connect`, the user sees a chat warning naming each missing hook. `/dv status` shows the wired/missing state at any time.
+
+**Cached state:** `DiceVision.hooksRegistered = { ability = bool, reroll = bool, ["table"] = bool }` is updated by the central `registerHooks(verbose)` helper at three sites (load-time silent, `setMode("replace")` silent, `/dv connect` verbose) and cleared by `removeRollInterceptor`.
+
+---
+
 ## Official Codex Hook: RollDialog.OnBeforeRoll
 
 ### DSRollDialog.lua (Official, Unmodified)

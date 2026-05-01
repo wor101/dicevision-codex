@@ -767,10 +767,56 @@ handlePendingRoll = function(rollData)
     return true
 end
 
+-- Hooks DiceVision registers on RollDialog. The Lua field name on RollDialog
+-- is the source of truth for whether a Codex install supports the hook -- if
+-- RollDialog[name] is nil before we register, Codex never declared (and so
+-- never invokes) it, and the corresponding roll type silently bypasses
+-- DiceVision. Order here drives /dv status and chat-warning ordering.
+local HOOK_SPECS = {
+    { name = "OnBeforeRoll",      key = "ability", label = "ability rolls" },
+    { name = "OnReroll",          key = "reroll",  label = "re-rolls" },
+    { name = "OnBeforeTableRoll", key = "table",   label = "table rolls" },
+}
+
+local function getHookFn(specName)
+    if specName == "OnBeforeRoll" then return onBeforeRoll end
+    if specName == "OnReroll" then return onReroll end
+    if specName == "OnBeforeTableRoll" then return onBeforeTableRoll end
+end
+
+-- Register hooks selectively: only assign to slots Codex declares.
+-- Caches the result on DiceVision.hooksRegistered for /dv status.
+-- When verbose=true, emits a chat warning for each missing hook.
+local function registerHooks(verbose)
+    local registered = { ability = false, reroll = false, ["table"] = false }
+    if not RollDialog then
+        if verbose then
+            chat.Send("[DiceVision] Warning: RollDialog not available; physical dice will not intercept any rolls.")
+        end
+        DiceVision.hooksRegistered = registered
+        return registered
+    end
+    for _, spec in ipairs(HOOK_SPECS) do
+        if RollDialog[spec.name] == nil then
+            if verbose then
+                chat.Send(string.format(
+                    "[DiceVision] Warning: Codex does not expose RollDialog.%s; %s will use virtual dice. (Update Codex to enable.)",
+                    spec.name, spec.label))
+            end
+        else
+            RollDialog[spec.name] = getHookFn(spec.name)
+            registered[spec.key] = true
+        end
+    end
+    DiceVision.hooksRegistered = registered
+    return registered
+end
+
 removeRollInterceptor = function()
     DiceVision.pendingRoll = nil
     DiceVision.waitingForRoll = false
     DiceVision.currentRequestId = nil
+    DiceVision.hooksRegistered = { ability = false, reroll = false, ["table"] = false }
     if RollDialog then
         RollDialog.OnBeforeRoll = false
         RollDialog.OnReroll = false
@@ -815,12 +861,10 @@ DiceVision.setMode = function(newMode)
         stopPolling()
         removeRollInterceptor()
     elseif newMode == "replace" then
-        -- Re-register callbacks (removeRollInterceptor sets them to false)
-        if RollDialog then
-            RollDialog.OnBeforeRoll = onBeforeRoll
-            RollDialog.OnReroll = onReroll
-            RollDialog.OnBeforeTableRoll = onBeforeTableRoll
-        end
+        -- Re-register callbacks (removeRollInterceptor sets them to false).
+        -- Silent: setMode is also called from setup paths where chat warnings
+        -- would be noisy; /dv connect is the user-visible probe.
+        registerHooks(false)
     end
 
     return true
@@ -851,12 +895,10 @@ Commands.dv = function(args)
         validateSession(function(success, result)
             if success then
                 DiceVision.mode = "replace"
-                -- Ensure callbacks are registered (handles load order)
-                if RollDialog then
-                    RollDialog.OnBeforeRoll = onBeforeRoll
-                    RollDialog.OnReroll = onReroll
-                    RollDialog.OnBeforeTableRoll = onBeforeTableRoll
-                end
+                -- Probe-and-register: warn the user about any hook the Codex
+                -- install is missing so they know which roll types will fall
+                -- back to virtual dice.
+                registerHooks(true)
                 chat.Send("[DiceVision] Connected! Ready to capture dice rolls.")
             else
                 chat.Send("[DiceVision] Connection failed: " .. tostring(result))
@@ -874,13 +916,26 @@ Commands.dv = function(args)
         chat.Send("[DiceVision] Disconnected")
 
     elseif subcommand == "status" then
+        local hooks = DiceVision.hooksRegistered
+            or { ability = false, reroll = false, ["table"] = false }
+        local function yn(v) return v and "YES" or "NO" end
+        local missing = {}
+        for _, spec in ipairs(HOOK_SPECS) do
+            if not hooks[spec.key] then
+                missing[#missing + 1] = "RollDialog." .. spec.name
+            end
+        end
         local status = string.format(
-            "[DiceVision] Status:\n  Connected: %s\n  Session: %s\n  Mode: %s\n  Polling: %s",
+            "[DiceVision] Status:\n  Connected: %s\n  Session: %s\n  Mode: %s\n  Polling: %s\n  Hooks: ability=%s, reroll=%s, table=%s",
             tostring(DiceVision.connected),
             DiceVision.sessionCode or "none",
             DiceVision.mode,
-            tostring(DiceVision.isPolling)
+            tostring(DiceVision.isPolling),
+            yn(hooks.ability), yn(hooks.reroll), yn(hooks["table"])
         )
+        if #missing > 0 then
+            status = status .. "\n  Missing Codex hooks: " .. table.concat(missing, ", ")
+        end
         chat.Send(status)
 
     elseif subcommand == "mode" then
@@ -1036,7 +1091,7 @@ Commands.dv = function(args)
 [DiceVision] Commands:
   /dv connect <code>  - Connect to DiceVision session
   /dv disconnect      - Disconnect from session
-  /dv status          - Show connection status
+  /dv status          - Show connection status (includes Codex hook state)
   /dv mode <mode>     - Set mode: off or replace
   /dv rules           - Configure dice processing rules
   /dv test            - Test API connection
@@ -1044,6 +1099,14 @@ Commands.dv = function(args)
 Modes:
   off     - DiceVision disabled
   replace - Physical rolls replace virtual dice
+
+Codex requirements:
+  DiceVision uses three RollDialog hooks. Missing hooks fall back to
+  virtual dice for that roll type only.
+    OnBeforeRoll       - ability rolls
+    OnReroll           - re-rolls
+    OnBeforeTableRoll  - random table lookups
+  Run /dv status to see which hooks the current Codex install supports.
 ]=])
     end
 end
@@ -1204,11 +1267,10 @@ onBeforeTableRoll = function(hookData)
     return "intercept"
 end
 
--- Register callbacks (guarded for load order)
-if RollDialog then
-    RollDialog.OnBeforeRoll = onBeforeRoll
-    RollDialog.OnReroll = onReroll
-    RollDialog.OnBeforeTableRoll = onBeforeTableRoll
-end
+-- Register callbacks at load time. Silent: the user has not opted in yet
+-- (no /dv connect), so any missing-hook warning would be noise. The cached
+-- DiceVision.hooksRegistered still reflects what got wired, so /dv status
+-- can report it accurately even before the first connect.
+registerHooks(false)
 
 print("DV: DiceVision script loaded")
