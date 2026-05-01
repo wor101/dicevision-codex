@@ -46,11 +46,15 @@ DiceVision registers three callbacks on `RollDialog`:
 | `RollDialog.OnReroll` | Re-rolls | `Draw Steel UI/DSRollDialog.lua:12` (declaration), `:2211-2212` (call site) |
 | `RollDialog.OnBeforeTableRoll` | Random table lookups | `Draw Steel UI/DSRollDialog.lua:13` (declaration), `DMHub Game Hud/RollOnTableDialog.lua:181-211` (call site) |
 
-The hook field on `RollDialog` is declared as `false` by official Codex. DiceVision uses `RollDialog[hookName] == nil` as the probe: if the field is `nil` before we register, Codex never declared (and so never invokes) it, and that roll type silently bypasses DiceVision.
+The hook field on `RollDialog` is declared as `false` by official Codex. DiceVision detects "Codex declared this hook" by the field being non-nil at load time. Once we install our hook functions, the live `RollDialog` table no longer reflects Codex's original declaration state -- subsequent lifecycle events (`removeRollInterceptor`, `setMode("off")`, future cleanup paths) write `false` into every slot. So the source-of-truth is captured **once at load time** into a snapshot.
 
-**Graceful degradation:** DiceVision registers selectively -- only assigning a callback to slots Codex declares. Missing hooks fall back to virtual dice for that roll type only; other roll types are unaffected. On `/dv connect`, the user sees a chat warning naming each missing hook. `/dv status` shows the wired/missing state at any time.
+**Graceful degradation:** DiceVision registers selectively -- only assigning a callback to slots Codex declared. Missing hooks fall back to virtual dice for that roll type only; other roll types are unaffected. The user sees a chat warning naming each missing hook on every user-driven opt-in (`/dv connect`, `/dv mode replace`, the dice-panel toggle). A `printf` log entry is emitted for every missing hook regardless of the verbose-vs-silent path, so a post-mortem trail exists even on the load-time silent path. `/dv status` shows the wired/missing state at any time.
 
-**Cached state:** `DiceVision.hooksRegistered = { ability = bool, reroll = bool, ["table"] = bool }` is updated by the central `registerHooks(verbose)` helper at three sites (load-time silent, `setMode("replace")` silent, `/dv connect` verbose) and cleared by `removeRollInterceptor`.
+**Two caches:**
+- `DiceVision.codexDeclaredHooks = { ability = bool, reroll = bool, ["table"] = bool }` -- captured once on the first `registerHooks` call from the live `RollDialog` state, then never re-derived. This is the load-bearing snapshot. **Never reset in production.**
+- `DiceVision.hooksRegistered = { ability = bool, reroll = bool, ["table"] = bool }` -- reflects whether each hook is currently wired. Updated by `registerHooks` and cleared by `removeRollInterceptor`. Read by `/dv status`.
+
+**Verbose vs silent paths:** `registerHooks(verbose)` emits chat warnings only when `verbose=true`. User-driven entry points (`/dv connect`, `/dv mode replace`, panel toggle) pass `true`. Internal/setup paths (load-time, hidden mode transitions) pass `false`. The `printf` trail fires unconditionally.
 
 ---
 

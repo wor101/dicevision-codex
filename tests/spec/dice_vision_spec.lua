@@ -2410,4 +2410,111 @@ describe("DiceVision", function()
             assert.truthy(string.find(msg, "table=NO"))
         end)
     end)
+
+    -- ============================================================================
+    -- Category 17: Mode-command UX and snapshot edge cases
+    -- ============================================================================
+
+    describe("/dv mode no-op handling", function()
+        it("emits 'Already in mode X' when re-issued for the current mode", function()
+            DiceVision.mode = "replace"
+            _G._chatLog = {}
+            Commands.dv("mode replace")
+            local found, alsoChanged = false, false
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "send" and string.find(entry.message, "Already in mode replace") then
+                    found = true
+                end
+                if entry.type == "send" and string.find(entry.message, "Mode changed:") then
+                    alsoChanged = true
+                end
+            end
+            assert.is_true(found)
+            assert.is_false(alsoChanged)
+        end)
+
+        it("still emits 'Mode changed' on a real transition", function()
+            DiceVision.mode = "off"
+            _G._chatLog = {}
+            Commands.dv("mode replace")
+            local found = false
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "send" and string.find(entry.message, "Mode changed: off %-> replace") then
+                    found = true
+                    break
+                end
+            end
+            assert.is_true(found)
+        end)
+    end)
+
+    describe("registerHooks no-RollDialog snapshot lock", function()
+        it("locks codexDeclaredHooks to all-false when RollDialog is nil", function()
+            local savedRollDialog = _G.RollDialog
+            _G.RollDialog = nil
+            DiceVision.codexDeclaredHooks = nil
+            DiceVision.setMode("off")  -- ensure off so setMode("replace") triggers
+            DiceVision.setMode("replace")
+            _G.RollDialog = savedRollDialog
+            assert.is_not_nil(DiceVision.codexDeclaredHooks)
+            assert.is_false(DiceVision.codexDeclaredHooks.ability)
+            assert.is_false(DiceVision.codexDeclaredHooks.reroll)
+            assert.is_false(DiceVision.codexDeclaredHooks["table"])
+        end)
+
+        it("does NOT re-snapshot from RollDialog if it appears later", function()
+            -- Initial register with RollDialog absent locks the snapshot.
+            local savedRollDialog = _G.RollDialog
+            _G.RollDialog = nil
+            DiceVision.codexDeclaredHooks = nil
+            DiceVision.setMode("off")
+            DiceVision.setMode("replace")
+            -- RollDialog now appears with all hooks declared.
+            _G.RollDialog = { OnBeforeRoll = false, OnReroll = false, OnBeforeTableRoll = false }
+            DiceVision.setMode("off")
+            DiceVision.setMode("replace")
+            -- Snapshot still says all-false; no slots got wired.
+            assert.is_false(DiceVision.codexDeclaredHooks.ability)
+            assert.is_false(DiceVision.hooksRegistered.ability)
+            _G.RollDialog = savedRollDialog
+        end)
+    end)
+
+    describe("DVDicePanel toggle (verbose contract)", function()
+        -- The panel toggle calls DiceVision.setMode(newMode, newMode == "replace");
+        -- we test by invoking setMode with verbose=true and asserting the
+        -- chat warning fires. The panel UI itself is not unit-testable here,
+        -- but the contract DiceVision exposes is.
+        it("setMode('replace', true) emits a missing-hook warning", function()
+            RollDialog.OnBeforeRoll = false
+            RollDialog.OnReroll = false
+            RollDialog.OnBeforeTableRoll = nil
+            _G._chatLog = {}
+            DiceVision.setMode("replace", true)
+            local warned = false
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "send"
+                    and string.find(entry.message, "Codex does not expose")
+                    and string.find(entry.message, "OnBeforeTableRoll")
+                    and string.find(entry.message, "hook missing") then
+                    warned = true
+                    break
+                end
+            end
+            assert.is_true(warned)
+        end)
+
+        it("setMode('replace', false) emits no chat warning even with missing hook", function()
+            RollDialog.OnBeforeRoll = false
+            RollDialog.OnReroll = false
+            RollDialog.OnBeforeTableRoll = nil
+            _G._chatLog = {}
+            DiceVision.setMode("replace", false)
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "send" then
+                    assert.is_nil(string.find(entry.message, "Codex does not expose"))
+                end
+            end
+        end)
+    end)
 end)

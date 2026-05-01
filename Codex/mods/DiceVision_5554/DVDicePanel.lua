@@ -290,7 +290,9 @@ CreateDiceVisionPanel = function()
             end
 
             local oldMode = DiceVision.mode
-            DiceVision.setMode(newMode)
+            -- Panel toggle is user-driven, mirror /dv mode: surface
+            -- missing-hook warnings on the replace transition.
+            DiceVision.setMode(newMode, newMode == "replace")
             chat.Send("[DiceVision] Mode changed: " .. oldMode .. " -> " .. newMode)
             updateState()
         end,
