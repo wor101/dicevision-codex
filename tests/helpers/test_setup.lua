@@ -104,7 +104,7 @@ _G.loadDiceVision = function()
     _G.Commands = {}
 
     -- RollDialog stub (guarded nil check at line 1049)
-    _G.RollDialog = { OnBeforeRoll = false, OnReroll = false }
+    _G.RollDialog = { OnBeforeRoll = false, OnReroll = false, OnBeforeTableRoll = false }
 
     -- Chat stubs: capture messages for assertions
     _G.chat = {
@@ -173,6 +173,7 @@ _G.resetDiceVisionState = function()
     -- Reset RollDialog
     RollDialog.OnBeforeRoll = false
     RollDialog.OnReroll = false
+    RollDialog.OnBeforeTableRoll = false
 
     -- Reset dmhub runtime stubs
     dmhub.Roll = function(rollArgs) table.insert(_G._dmhubRollLog, rollArgs); return {id = "roll-" .. #_G._dmhubRollLog} end

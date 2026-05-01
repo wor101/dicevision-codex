@@ -147,6 +147,13 @@ DiceVision.pendingRoll = {
     isReroll = nil,                   -- true when this is a re-roll
     amendWithResult = nil,            -- Callback: amendWithResult(totalString)
     activeRoll = nil,                 -- Original roll object to restore before amend
+    -- Table-roll only fields (set by onBeforeTableRoll, nil for ability rolls):
+    isTableRoll = nil,                -- true when this is a table roll
+    completeWithResult = nil,         -- Callback: completeWithResult(totalInteger)
+    tableRef = nil,                   -- Codex table reference passed by hook
+    tableName = nil,
+    tokenid = nil,
+    guid = nil,
 }
 ```
 
@@ -189,6 +196,37 @@ hookData = {
 6. Unlike initial rolls, does NOT call `dmhub.Roll()` -- the amend engine handles it
 
 **Important:** `amendWithResult` receives `finalTotal` (with edge/bane modifier applied), because the Codex amend engine does NOT re-apply edge/bane modifiers.
+
+#### onBeforeTableRoll Callback (registered on RollDialog.OnBeforeTableRoll)
+
+The `RollDialog.OnBeforeTableRoll` hook is called when a player triggers a random table lookup (e.g., 1d100 wild magic table, 1d20 treasure table). DiceVision intercepts these the same way it intercepts initial rolls and re-rolls.
+
+**Hook data from DSRollDialog:**
+```lua
+hookData = {
+    roll = rollString,                  -- e.g., "1d100" or "1d20+3"
+    description = string,
+    creature = creature,
+    tokenid = tokenId,
+    properties = props,
+    tableRef = tableRef,                -- Codex table reference object
+    tableName = string,
+    guid = string,
+    completeWithResult = function(int), -- Callback: pass final total as integer
+}
+```
+
+Note the shape differs from `OnBeforeRoll` / `OnReroll`: there is no `boons`, `banes`, `multitargets`, `rollArgs`, `activeRoll`, or `setActiveRoll`. Table rolls are simple lookups and skip all edge/bane/tier logic.
+
+**Table-roll flow:**
+1. `onBeforeTableRoll` intercepts, stores `pendingRoll` with `isTableRoll=true`
+2. Physical dice arrive, `handlePendingRoll` table-roll branch runs first (before the `rollArgs` guard)
+3. Detects d100 percentile pair via `DiceRollLogic.detectPercentilePair` (handles "00"+"0" -> 100 case)
+4. Sends `DiceVisionRollMessage` to chat with `rollSource="table"`
+5. Calls `completeWithResult(total)` -- `total` is an **integer**, not a string (different from `amendWithResult`)
+6. Does NOT call `dmhub.Roll()` and does NOT apply edge/bane math
+
+**Important:** On timeout / error / mode-off, table rolls are silently abandoned with a chat notice ("Table roll abandoned. Re-trigger to retry."). Unlike re-rolls, there is no synchronous fallback -- `completeWithResult` requires an integer, and there is no way to evaluate the table-roll formula locally without invoking the async `dmhub.Roll`.
 
 #### handlePendingRoll
 

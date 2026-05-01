@@ -1323,4 +1323,547 @@ describe("DiceVision", function()
             assert.truthy(string.find(_G._chatLog[2].message, "Current mode"))
         end)
     end)
+
+    -- ============================================================================
+    -- Category 12: onBeforeTableRoll callback
+    -- ============================================================================
+
+    describe("onBeforeTableRoll callback", function()
+        local onTableRollFn
+        before_each(function()
+            DiceVision.setMode("replace")
+            onTableRollFn = RollDialog.OnBeforeTableRoll
+            resetDiceVisionState()
+        end)
+
+        it("returns nil when mode is off", function()
+            DiceVision.mode = "off"
+            DiceVision.connected = true
+            local result = onTableRollFn({
+                roll = "1d100",
+                description = "Wild Magic",
+                completeWithResult = function() end,
+            })
+            assert.is_nil(result)
+        end)
+
+        it("returns nil when not connected", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = false
+            local result = onTableRollFn({
+                roll = "1d100",
+                description = "Wild Magic",
+                completeWithResult = function() end,
+            })
+            assert.is_nil(result)
+        end)
+
+        it("returns nil when already waiting for a roll", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.waitingForRoll = true
+            local result = onTableRollFn({
+                roll = "1d100",
+                description = "Wild Magic",
+                completeWithResult = function() end,
+            })
+            assert.is_nil(result)
+        end)
+
+        it("returns 'intercept' and sets pendingRoll with isTableRoll=true", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            local completeFn = function() end
+            local result = onTableRollFn({
+                roll = "1d100",
+                description = "Wild Magic Surge",
+                completeWithResult = completeFn,
+            })
+            assert.are.equal("intercept", result)
+            assert.is_true(DiceVision.waitingForRoll)
+            assert.is_not_nil(DiceVision.pendingRoll)
+            assert.is_true(DiceVision.pendingRoll.isTableRoll)
+            assert.are.equal(completeFn, DiceVision.pendingRoll.completeWithResult)
+            assert.are.equal("1d100", DiceVision.pendingRoll.originalRoll)
+            assert.are.equal("Wild Magic Surge", DiceVision.pendingRoll.description)
+        end)
+
+        it("does not set rollArgs/multitargets/edges/banes/setActiveRoll on pendingRoll", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            onTableRollFn({
+                roll = "1d100",
+                description = "Wild Magic",
+                completeWithResult = function() end,
+            })
+            assert.is_nil(DiceVision.pendingRoll.rollArgs)
+            assert.is_nil(DiceVision.pendingRoll.multitargets)
+            assert.is_nil(DiceVision.pendingRoll.edges)
+            assert.is_nil(DiceVision.pendingRoll.banes)
+            assert.is_nil(DiceVision.pendingRoll.setActiveRoll)
+            assert.is_nil(DiceVision.pendingRoll.activeRoll)
+            assert.is_nil(DiceVision.pendingRoll.amendWithResult)
+            assert.is_nil(DiceVision.pendingRoll.isReroll)
+        end)
+
+        it("round-trips tokenid, tableRef, tableName, guid", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            local tableRefObj = { id = "treasure-table" }
+            onTableRollFn({
+                roll = "1d100",
+                description = "Treasure",
+                tokenid = "token-42",
+                tableRef = tableRefObj,
+                tableName = "Treasure Hoard",
+                guid = "guid-xyz",
+                completeWithResult = function() end,
+            })
+            assert.are.equal("token-42", DiceVision.pendingRoll.tokenid)
+            assert.are.equal(tableRefObj, DiceVision.pendingRoll.tableRef)
+            assert.are.equal("Treasure Hoard", DiceVision.pendingRoll.tableName)
+            assert.are.equal("guid-xyz", DiceVision.pendingRoll.guid)
+        end)
+
+        it("sends table-roll waiting message to chat", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            onTableRollFn({
+                roll = "1d100",
+                description = "Wild Magic",
+                completeWithResult = function() end,
+            })
+            local found = false
+            for _, entry in ipairs(_G._chatLog) do
+                if string.find(entry.message, "table roll") then
+                    found = true
+                    break
+                end
+            end
+            assert.is_true(found)
+        end)
+
+        it("falls back description to tableName when description not provided", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            onTableRollFn({
+                roll = "1d100",
+                tableName = "Wild Magic",
+                completeWithResult = function() end,
+            })
+            assert.are.equal("Wild Magic", DiceVision.pendingRoll.description)
+        end)
+    end)
+
+    -- ============================================================================
+    -- Category 13: handlePendingRoll table-roll path
+    -- ============================================================================
+
+    describe("handlePendingRoll table-roll path", function()
+        it("calls completeWithResult with integer total for d20 table roll", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            local captured = nil
+            DiceVision.pendingRoll = {
+                originalRoll = "1d20",
+                description = "Treasure Table",
+                isTableRoll = true,
+                completeWithResult = function(val) captured = val end,
+            }
+            DiceVision.waitingForRoll = true
+
+            local rollData = {
+                dice = { { type = "d20", value = 14 } },
+                total = 14,
+            }
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            assert.are.equal(14, captured)
+            assert.are.equal("number", type(captured))
+        end)
+
+        it("maps percentile pair '00'+'0' to total 100", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            local captured = nil
+            DiceVision.pendingRoll = {
+                originalRoll = "1d100",
+                description = "Wild Magic",
+                isTableRoll = true,
+                completeWithResult = function(val) captured = val end,
+            }
+            DiceVision.waitingForRoll = true
+
+            -- API sends die.value as a string; handleDiceVisionRoll derives
+            -- rawValue from it. Pass strings to match real-world shape.
+            local rollData = {
+                dice = {
+                    { type = "d10", value = "00" },
+                    { type = "d10", value = "0" },
+                },
+                total = 0,
+            }
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            assert.are.equal(100, captured)
+            assert.are.equal("number", type(captured))
+        end)
+
+        it("computes percentile total 75 from '70'+'5'", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            local captured = nil
+            DiceVision.pendingRoll = {
+                originalRoll = "1d100",
+                description = "Wild Magic",
+                isTableRoll = true,
+                completeWithResult = function(val) captured = val end,
+            }
+            DiceVision.waitingForRoll = true
+
+            local rollData = {
+                dice = {
+                    { type = "d10", value = "70" },
+                    { type = "d10", value = "5" },
+                },
+                total = 75,
+            }
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            assert.are.equal(75, captured)
+        end)
+
+        it("applies modifier from originalRoll string (1d20+3 -> 13)", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            local captured = nil
+            DiceVision.pendingRoll = {
+                originalRoll = "1d20+3",
+                description = "Modified Table",
+                isTableRoll = true,
+                completeWithResult = function(val) captured = val end,
+            }
+            DiceVision.waitingForRoll = true
+
+            local rollData = {
+                dice = { { type = "d20", value = 10 } },
+                total = 10,
+            }
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            assert.are.equal(13, captured)
+        end)
+
+        it("does NOT call dmhub.Roll for table rolls", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            DiceVision.pendingRoll = {
+                originalRoll = "1d20",
+                description = "Table",
+                isTableRoll = true,
+                completeWithResult = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            local rollData = {
+                dice = { { type = "d20", value = 14 } },
+                total = 14,
+            }
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            assert.are.equal(0, #_G._dmhubRollLog)
+        end)
+
+        it("ignores edges/banes if defensively present on pendingRoll", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            local captured = nil
+            DiceVision.pendingRoll = {
+                originalRoll = "1d20",
+                description = "Defensive Edge Table",
+                isTableRoll = true,
+                edges = 99,
+                banes = 0,
+                completeWithResult = function(val) captured = val end,
+            }
+            DiceVision.waitingForRoll = true
+
+            local rollData = {
+                dice = { { type = "d20", value = 10 } },
+                total = 10,
+            }
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            assert.are.equal(10, captured)
+        end)
+
+        it("sends DiceVisionRollMessage to chat with description and rollSource='table'", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            DiceVision.pendingRoll = {
+                originalRoll = "1d20",
+                description = "Treasure Lookup",
+                isTableRoll = true,
+                completeWithResult = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            local rollData = {
+                dice = { { type = "d20", value = 14 } },
+                total = 14,
+            }
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            local found = false
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "custom"
+                    and entry.message.description == "Treasure Lookup"
+                    and entry.message.rollSource == "table" then
+                    found = true
+                    break
+                end
+            end
+            assert.is_true(found)
+        end)
+
+        it("does not call setActiveRoll for table rolls", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            local setActiveCalled = false
+            DiceVision.pendingRoll = {
+                originalRoll = "1d20",
+                description = "Defensive setActiveRoll Table",
+                isTableRoll = true,
+                completeWithResult = function() end,
+                setActiveRoll = function() setActiveCalled = true end,
+            }
+            DiceVision.waitingForRoll = true
+
+            local rollData = {
+                dice = { { type = "d20", value = 14 } },
+                total = 14,
+            }
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            assert.is_false(setActiveCalled)
+        end)
+    end)
+
+    -- ============================================================================
+    -- Category 14: Fallback paths for table rolls
+    -- ============================================================================
+
+    describe("fallback paths for table rolls", function()
+        it("timeout sends abandon notice and does not call completeWithResult", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            local completeCalled = false
+            DiceVision.pendingRoll = {
+                originalRoll = "1d100",
+                description = "Timeout Table",
+                isTableRoll = true,
+                completeWithResult = function() completeCalled = true end,
+            }
+            DiceVision.waitingForRoll = true
+
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = {} })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            assert.is_false(completeCalled)
+            assert.are.equal(0, #_G._dmhubRollLog)
+            local found = false
+            for _, entry in ipairs(_G._chatLog) do
+                if string.find(entry.message, "abandoned") then
+                    found = true
+                    break
+                end
+            end
+            assert.is_true(found)
+        end)
+
+        it("error sends abandon notice and does not call completeWithResult", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            local completeCalled = false
+            DiceVision.pendingRoll = {
+                originalRoll = "1d100",
+                description = "Error Table",
+                isTableRoll = true,
+                completeWithResult = function() completeCalled = true end,
+            }
+            DiceVision.waitingForRoll = true
+
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.error then
+                    args.error("connection failed", 500)
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            assert.is_false(completeCalled)
+            assert.are.equal(0, #_G._dmhubRollLog)
+            local found = false
+            for _, entry in ipairs(_G._chatLog) do
+                if string.find(entry.message, "abandoned") then
+                    found = true
+                    break
+                end
+            end
+            assert.is_true(found)
+        end)
+
+        it("mode-off sends abandon notice and does not call completeWithResult", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            local completeCalled = false
+            DiceVision.pendingRoll = {
+                originalRoll = "1d100",
+                description = "Mode Off Table",
+                isTableRoll = true,
+                completeWithResult = function() completeCalled = true end,
+            }
+            DiceVision.waitingForRoll = true
+
+            DiceVision.setMode("off")
+
+            assert.is_false(completeCalled)
+            assert.are.equal(0, #_G._dmhubRollLog)
+            local found = false
+            for _, entry in ipairs(_G._chatLog) do
+                if string.find(entry.message, "abandoned") then
+                    found = true
+                    break
+                end
+            end
+            assert.is_true(found)
+        end)
+    end)
+
+    -- ============================================================================
+    -- Category 15: OnBeforeTableRoll hook lifecycle
+    -- ============================================================================
+
+    describe("OnBeforeTableRoll hook lifecycle", function()
+        it("is registered when switching to replace mode", function()
+            DiceVision.setMode("replace")
+            assert.is_function(RollDialog.OnBeforeTableRoll)
+        end)
+
+        it("is cleared on disconnect", function()
+            RollDialog.OnBeforeTableRoll = function() end
+            Commands.dv("disconnect")
+            assert.is_false(RollDialog.OnBeforeTableRoll)
+        end)
+
+        it("is cleared when mode set to off", function()
+            DiceVision.mode = "replace"
+            RollDialog.OnBeforeTableRoll = function() end
+            DiceVision.setMode("off")
+            assert.is_false(RollDialog.OnBeforeTableRoll)
+        end)
+
+        it("is registered on connect success", function()
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ active = true })
+                end
+            end
+            Commands.dv("connect ABC123")
+            net.Get = originalNetGet
+            assert.is_function(RollDialog.OnBeforeTableRoll)
+        end)
+
+        it("is registered at load time", function()
+            local originalNetGet = net.Get
+            net.Get = function() end
+            loadDiceVision()
+            net.Get = originalNetGet
+            assert.is_function(RollDialog.OnBeforeTableRoll)
+        end)
+    end)
 end)

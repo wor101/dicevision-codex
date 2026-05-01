@@ -358,6 +358,7 @@ local postRollToChat        -- Used by handleDiceVisionRoll
 local longPollForRolls      -- Recursive call
 local onBeforeRoll          -- Used by /dv connect, registered on RollDialog.OnBeforeRoll
 local onReroll              -- Used by /dv connect, registered on RollDialog.OnReroll
+local onBeforeTableRoll     -- Used by /dv connect, registered on RollDialog.OnBeforeTableRoll
 
 -- ============================================================================
 -- API Communication
@@ -443,6 +444,8 @@ abandonPendingRoll = function()
             pendingRoll.setActiveRoll(pendingRoll.activeRoll)
         end
         pendingRoll.amendWithResult(pendingRoll.originalRoll)
+    elseif pendingRoll.isTableRoll then
+        chat.Send("[DiceVision] Table roll abandoned. Re-trigger to retry.")
     elseif rollArgs then
         dmhub.Roll(rollArgs)
     end
@@ -619,6 +622,32 @@ handlePendingRoll = function(rollData)
         tostring(pendingRoll.originalRoll), modifier))
     local diceForMessage, diceSum = buildDiceMessage(rollData.dice, pendingRoll)
 
+    -- Table-roll path: completeWithResult takes an integer; no edge/bane/tier math
+    if pendingRoll.isTableRoll and pendingRoll.completeWithResult then
+        local percentile = DiceRollLogic.detectPercentilePair(rollData.dice)
+        local total
+        local isPercentile = false
+        if percentile then
+            total = percentile.total
+            isPercentile = true
+        else
+            total = diceSum + modifier
+        end
+        local visualMessage = DiceVisionRollMessage.new{
+            description = pendingRoll.description or "Table Roll",
+            dice = diceForMessage,
+            modifier = modifier,
+            total = total,
+            tier = nil,
+            tokenid = pendingRoll.tokenid,
+            rollSource = "table",
+            isPercentile = isPercentile,
+        }
+        chat.SendCustom(visualMessage)
+        pendingRoll.completeWithResult(total)
+        return true
+    end
+
     local edges = pendingRoll.edges or 0
     local banes = pendingRoll.banes or 0
     local edgeBaneMod = DiceRollLogic.GetRollModFromEdgesAndBanes(edges, banes)
@@ -727,6 +756,7 @@ removeRollInterceptor = function()
     if RollDialog then
         RollDialog.OnBeforeRoll = false
         RollDialog.OnReroll = false
+        RollDialog.OnBeforeTableRoll = false
     end
 end
 
@@ -771,6 +801,7 @@ DiceVision.setMode = function(newMode)
         if RollDialog then
             RollDialog.OnBeforeRoll = onBeforeRoll
             RollDialog.OnReroll = onReroll
+            RollDialog.OnBeforeTableRoll = onBeforeTableRoll
         end
     end
 
@@ -806,6 +837,7 @@ Commands.dv = function(args)
                 if RollDialog then
                     RollDialog.OnBeforeRoll = onBeforeRoll
                     RollDialog.OnReroll = onReroll
+                    RollDialog.OnBeforeTableRoll = onBeforeTableRoll
                 end
                 chat.Send("[DiceVision] Connected! Ready to capture dice rolls.")
             else
@@ -1106,10 +1138,57 @@ onReroll = function(hookData)
     return "intercept"
 end
 
+-- ============================================================================
+-- RollDialog.OnBeforeTableRoll Callback (table roll interception)
+-- ============================================================================
+
+onBeforeTableRoll = function(hookData)
+    if not hookData then return nil end
+    if not DiceVision then return nil end
+
+    if DiceVision.mode ~= "replace" or not DiceVision.connected then
+        return nil
+    end
+
+    if DiceVision.waitingForRoll then
+        return nil
+    end
+
+    print(string.format("DV: onBeforeTableRoll - roll='%s', tableName='%s', description='%s'",
+        tostring(hookData.roll), tostring(hookData.tableName), tostring(hookData.description)))
+
+    DiceVision.pendingRoll = {
+        originalRoll = hookData.roll,
+        description = hookData.description or hookData.tableName,
+        tokenid = hookData.tokenid,
+        creature = hookData.creature,
+        properties = hookData.properties,
+        tableRef = hookData.tableRef,
+        tableName = hookData.tableName,
+        guid = hookData.guid,
+        completeWithResult = hookData.completeWithResult,
+        isTableRoll = true,
+    }
+
+    DiceVision.waitingForRoll = true
+    DiceVision.rollStartTime = dmhub.Time() * 1000
+    DiceVision.currentRequestId = generateRequestId()
+
+    if DiceVision.connected and not DiceVision.isPolling then
+        startPolling()
+    end
+
+    showWaitingDialog()
+    chat.Send("[DiceVision] Waiting for physical dice (table roll)...")
+
+    return "intercept"
+end
+
 -- Register callbacks (guarded for load order)
 if RollDialog then
     RollDialog.OnBeforeRoll = onBeforeRoll
     RollDialog.OnReroll = onReroll
+    RollDialog.OnBeforeTableRoll = onBeforeTableRoll
 end
 
 print("DV: DiceVision script loaded")
