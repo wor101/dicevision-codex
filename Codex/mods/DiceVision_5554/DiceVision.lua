@@ -703,6 +703,20 @@ handlePendingRoll = function(rollData)
         if pendingRoll.setActiveRoll and pendingRoll.activeRoll then
             pendingRoll.setActiveRoll(pendingRoll.activeRoll)
         end
+        -- Re-rolls bypass our dmhub.Roll complete-wrapper, so the tier-
+        -- shift override that fires for net edges/banes >= +/-2 isn't
+        -- applied automatically. Write overrideTier directly onto the
+        -- inherited rollArgs.properties before amending; the integration
+        -- branch's doRerollAmend passes properties through so the amend
+        -- engine picks it up. Re-uses calculatedTier which already
+        -- accounts for the tier-shift when applicable.
+        local net = edges - banes
+        if (net >= 2 or net <= -2)
+            and pendingRoll.rollArgs and pendingRoll.rollArgs.properties
+            and type(pendingRoll.rollArgs.properties.try_get) == "function" then
+            local props = pendingRoll.rollArgs.properties
+            props.overrideTier = tier
+        end
         chat.SendCustom(visualMessage)
         pendingRoll.amendWithResult(tostring(finalTotal))
         return true

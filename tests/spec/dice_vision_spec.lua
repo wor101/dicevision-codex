@@ -901,6 +901,108 @@ describe("DiceVision", function()
             assert.are.equal("17", amendCalled)
         end)
 
+        it("writes overrideTier on properties for 2-edge re-rolls before amend", function()
+            -- Re-rolls bypass the dmhub.Roll complete-wrapper, so the
+            -- tier-shift override (net edges/banes >= +/-2) must be set
+            -- directly on the inherited properties before amendWithResult
+            -- so the amend engine picks it up. Mirrors the initial-roll
+            -- path's complete-callback behavior.
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            local amendCalledAt = nil
+            local props = {
+                try_get = function(self, key) return rawget(self, key) end,
+            }
+            DiceVision.pendingRoll = {
+                rollArgs = {
+                    roll = "2d10+5",
+                    creature = nil,
+                    properties = props,
+                },
+                originalRoll = "2d10+5",
+                description = "Re-roll 2 Edges",
+                edges = 2,
+                banes = 0,
+                isReroll = true,
+                amendWithResult = function(val)
+                    -- Capture the overrideTier value at the moment amend
+                    -- is invoked, so we verify the write happens BEFORE
+                    -- amend (not after).
+                    amendCalledAt = props.overrideTier
+                end,
+                activeRoll = { id = "roll-1" },
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            -- baseTotal = 7+3+5 = 15, T2 (12-16) -> +1 tier shift = T3
+            local rollData = {
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            }
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            assert.are.equal(3, amendCalledAt)
+            assert.are.equal(3, props.overrideTier)
+        end)
+
+        it("does not write overrideTier on properties for 1-edge re-rolls", function()
+            -- Net 1 is a flat +2 modifier, NOT a tier shift. No override.
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            local props = {
+                try_get = function(self, key) return rawget(self, key) end,
+            }
+            DiceVision.pendingRoll = {
+                rollArgs = {
+                    roll = "2d10+5",
+                    creature = nil,
+                    properties = props,
+                },
+                originalRoll = "2d10+5",
+                description = "Re-roll 1 Edge",
+                edges = 1,
+                banes = 0,
+                isReroll = true,
+                amendWithResult = function() end,
+                activeRoll = { id = "roll-1" },
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            local rollData = {
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            }
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            assert.is_nil(props.overrideTier)
+        end)
+
         it("calls setActiveRoll before amendWithResult for re-rolls", function()
             DiceVision.mode = "replace"
             DiceVision.connected = true
