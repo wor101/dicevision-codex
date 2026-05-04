@@ -708,20 +708,22 @@ handlePendingRoll = function(rollData)
         return true
     end
 
-    -- Build a copy of rollArgs to mutate. Codex holds the same rollArgs
-    -- reference in g_activeRollArgs; mutating it in place pollutes the
-    -- caller's view of the original dice expression. On un-updated Codex
-    -- where the re-roll dialog reads g_activeRollArgs.roll directly and
-    -- amends with it, our deterministic-total mutation would make the
-    -- amend re-roll a literal value (e.g. "35 1 edge"), which silently
-    -- fails. Copying preserves the original for the re-roll path.
+    -- Shallow-copy the TOP LEVEL of rollArgs to isolate our deterministic-
+    -- total mutations (roll/boons/banes/instant). Codex holds the same
+    -- rollArgs reference in g_activeRollArgs; on un-updated Codex the
+    -- re-roll dialog reads g_activeRollArgs.roll and amends with it, so
+    -- mutating roll in place would make the amend re-roll a literal value
+    -- and silently fail. The copy isolates that.
+    --
+    -- We do NOT copy rollArgs.properties: Codex's properties is a
+    -- registered game type with metamethods (try_get etc.) and a shallow
+    -- copy strips the metatable, breaking downstream code that calls
+    -- properties:try_get(...) (ActionLogPanel, MCDMAbilityRollBehaviors).
+    -- Keeping the same properties reference means our multitargets[1]
+    -- mutation below leaks into the caller's properties, but that mutation
+    -- pre-existed our copy fix and Codex already tolerates it.
     local rollArgsForDmhub = {}
     for k, v in pairs(rollArgs) do rollArgsForDmhub[k] = v end
-    if rollArgs.properties then
-        local propsCopy = {}
-        for k, v in pairs(rollArgs.properties) do propsCopy[k] = v end
-        rollArgsForDmhub.properties = propsCopy
-    end
 
     rollArgsForDmhub.instant = true
 
@@ -752,18 +754,10 @@ handlePendingRoll = function(rollData)
             rollArgsForDmhub.boons = 0
             rollArgsForDmhub.banes = 0
         end
-        -- Deep-copy multitargets so the [1].boons/banes mutations below
-        -- don't reach into the caller's array.
-        local multitargetsCopy = {}
-        for i, target in ipairs(pendingRoll.multitargets) do
-            local targetCopy = {}
-            for k, v in pairs(target) do targetCopy[k] = v end
-            multitargetsCopy[i] = targetCopy
-        end
-        multitargetsCopy[1].boons = 0
-        multitargetsCopy[1].banes = 0
         rollArgsForDmhub.properties = rollArgsForDmhub.properties or {}
-        rollArgsForDmhub.properties.multitargets = multitargetsCopy
+        rollArgsForDmhub.properties.multitargets = pendingRoll.multitargets
+        rollArgsForDmhub.properties.multitargets[1].boons = 0
+        rollArgsForDmhub.properties.multitargets[1].banes = 0
     end
 
     local originalComplete = rollArgs.complete

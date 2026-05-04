@@ -1330,29 +1330,28 @@ describe("DiceVision", function()
             assert.is_true(sentToDmhub.instant)
         end)
 
-        it("does not mutate caller's rollArgs.properties.multitargets", function()
-            -- Same regression class for the targeted-roll path: deep-copy
-            -- multitargets so [1].boons/.banes mutations don't reach the
-            -- caller's array (which Codex may still reference).
+        it("preserves rollArgs.properties identity (metatable not stripped)", function()
+            -- Codex's properties is a registered game type with metamethods
+            -- (try_get etc.). Shallow-copying it would strip the metatable
+            -- and break ActionLogPanel/MCDMAbilityRollBehaviors which call
+            -- properties:try_get(...). So we keep the same reference, even
+            -- though that means the multitargets[1].boons=0 mutation leaks
+            -- into the caller's properties (pre-existing behavior).
             DiceVision.mode = "replace"
             DiceVision.connected = true
             DiceVision.sessionCode = "TEST"
-            local origMultitargets = {
-                { tokenid = "tok-1", boons = 2, banes = 0 },
-                { tokenid = "tok-2", boons = 0, banes = 1 },
-            }
+            local origProps = { foo = "bar" }
             local origRollArgs = {
                 roll = "2d10+5",
                 creature = nil,
-                properties = { foo = "bar" },
+                properties = origProps,
             }
             DiceVision.pendingRoll = {
                 rollArgs = origRollArgs,
                 originalRoll = "2d10+5",
-                description = "Targeted Mutation Test",
-                edges = 1,
+                description = "Properties Identity Test",
+                edges = 0,
                 banes = 0,
-                multitargets = origMultitargets,
             }
             DiceVision.waitingForRoll = true
 
@@ -1373,12 +1372,10 @@ describe("DiceVision", function()
             DiceVision.startPolling()
             net.Get = originalNetGet
 
-            -- Original multitargets array preserved.
-            assert.are.equal(2, origMultitargets[1].boons)
-            assert.are.equal(1, origMultitargets[2].banes)
-            -- Original rollArgs.properties also unchanged.
-            assert.is_nil(origRollArgs.properties.multitargets)
-            assert.are.equal("bar", origRollArgs.properties.foo)
+            -- The properties table passed to dmhub.Roll must be the SAME
+            -- object as the caller's, so its metatable is preserved.
+            assert.are.equal(1, #_G._dmhubRollLog)
+            assert.are.equal(origProps, _G._dmhubRollLog[1].properties)
         end)
     end)
 
