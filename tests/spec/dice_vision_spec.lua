@@ -2281,6 +2281,37 @@ describe("DiceVision", function()
             assert.is_false(DiceVision.hooksRegistered["table"])
         end)
 
+        it("removeRollInterceptor does not pollute slots Codex never declared", function()
+            -- Codex declares only OnBeforeRoll; the others are nil.
+            RollDialog.OnBeforeRoll = false
+            RollDialog.OnReroll = nil
+            RollDialog.OnBeforeTableRoll = nil
+            DiceVision.setMode("replace")  -- captures snapshot, registers ability only
+            Commands.dv("disconnect")      -- triggers removeRollInterceptor
+
+            -- Slots Codex never declared must stay nil so a fresh probe (e.g.,
+            -- across a Codex mod-reload) correctly identifies them as undeclared.
+            assert.is_nil(RollDialog.OnReroll)
+            assert.is_nil(RollDialog.OnBeforeTableRoll)
+            -- Slot Codex did declare gets cleared as before.
+            assert.is_false(RollDialog.OnBeforeRoll)
+        end)
+
+        it("simulated mod reload after disconnect re-detects undeclared slots", function()
+            RollDialog.OnBeforeRoll = false
+            RollDialog.OnReroll = nil
+            RollDialog.OnBeforeTableRoll = nil
+            DiceVision.setMode("replace")
+            Commands.dv("disconnect")
+            -- Simulate Codex reloading the mod: codexDeclaredHooks resets to
+            -- nil (DiceVision global re-created), but RollDialog persists.
+            DiceVision.codexDeclaredHooks = nil
+            DiceVision.setMode("replace")
+            assert.is_true(DiceVision.codexDeclaredHooks.ability)
+            assert.is_false(DiceVision.codexDeclaredHooks.reroll)
+            assert.is_false(DiceVision.codexDeclaredHooks["table"])
+        end)
+
         it("connect -> disconnect -> connect on missing hook stays disabled", function()
             -- Regression: removeRollInterceptor writes false to all three slots,
             -- which would poison a live RollDialog[name]==nil probe on the next

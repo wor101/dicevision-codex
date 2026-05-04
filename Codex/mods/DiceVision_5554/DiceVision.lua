@@ -845,9 +845,17 @@ removeRollInterceptor = function()
     DiceVision.currentRequestId = nil
     DiceVision.hooksRegistered = { ability = false, reroll = false, ["table"] = false }
     if RollDialog then
-        RollDialog.OnBeforeRoll = false
-        RollDialog.OnReroll = false
-        RollDialog.OnBeforeTableRoll = false
+        -- Only clear slots Codex originally declared. Slots that were nil
+        -- pre-load must stay nil so a future snapshot re-capture (e.g.,
+        -- across a Codex mod-reload where codexDeclaredHooks resets but
+        -- RollDialog persists) correctly identifies them as undeclared.
+        local declared = DiceVision.codexDeclaredHooks
+            or { ability = true, reroll = true, ["table"] = true }
+        for _, spec in ipairs(HOOK_SPECS) do
+            if declared[spec.key] then
+                RollDialog[spec.name] = false
+            end
+        end
     end
 end
 
