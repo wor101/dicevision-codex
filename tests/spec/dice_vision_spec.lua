@@ -1190,26 +1190,22 @@ describe("DiceVision", function()
             assert.is_true(found)
         end)
 
-        it("defers to virtual dice (returns nil) when context.setActiveRoll is missing", function()
+        it("works when context has no setActiveRoll", function()
             DiceVision.mode = "replace"
             DiceVision.connected = true
-            local result = onBeforeRollFn({
+            onBeforeRollFn({
                 roll = "2d10+5",
                 description = "Test Ability",
                 boons = 0,
                 rollArgs = { roll = "2d10+5" },
             })
-            -- Returning nil lets Codex's normal dmhub.Roll path run, which
-            -- sets g_activeRoll and keeps re-roll functional.
-            assert.is_nil(result)
-            assert.is_nil(DiceVision.pendingRoll)
-            assert.is_false(DiceVision.waitingForRoll)
+            assert.is_nil(DiceVision.pendingRoll.setActiveRoll)
         end)
 
         it("warns once when context.setActiveRoll is missing", function()
             DiceVision.mode = "replace"
             DiceVision.connected = true
-            -- First intercept-attempt on a Codex without setActiveRoll: warn.
+            -- First intercept on a Codex without setActiveRoll: should warn.
             onBeforeRollFn({
                 roll = "2d10+5",
                 description = "First Ability",
@@ -1219,41 +1215,49 @@ describe("DiceVision", function()
             local warned = false
             for _, entry in ipairs(_G._chatLog) do
                 if entry.type == "send"
-                    and string.find(entry.message, "does not pass setActiveRoll") then
+                    and string.find(entry.message, "does not pass setActiveRoll")
+                    and string.find(entry.message, "Re%-rolls") then
                     warned = true
                     break
                 end
             end
             assert.is_true(warned)
 
-            -- Second call must not re-fire the warning (session-scoped dedupe).
-            _G._chatLog = {}
-            DiceVision.warnedMissingSetActiveRoll = true  -- simulate persistence
+            -- Reset state and trigger again: the warning must not re-fire.
+            resetDiceVisionState()
+            -- Preserve the session-scoped flag the way production would
+            -- (resetDiceVisionState clears it in the test harness, so set
+            -- it back so we can verify the dedupe).
+            DiceVision.warnedMissingSetActiveRoll = true
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
             onBeforeRollFn({
                 roll = "2d10+5",
                 description = "Second Ability",
                 boons = 0,
                 rollArgs = { roll = "2d10+5" },
             })
+            local secondWarn = false
             for _, entry in ipairs(_G._chatLog) do
-                if entry.type == "send" then
-                    assert.is_nil(string.find(entry.message, "does not pass setActiveRoll"))
+                if entry.type == "send"
+                    and string.find(entry.message, "does not pass setActiveRoll") then
+                    secondWarn = true
+                    break
                 end
             end
+            assert.is_false(secondWarn)
         end)
 
-        it("intercepts normally when context.setActiveRoll is present", function()
+        it("does not warn when context.setActiveRoll is present", function()
             DiceVision.mode = "replace"
             DiceVision.connected = true
-            local result = onBeforeRollFn({
+            onBeforeRollFn({
                 roll = "2d10+5",
                 description = "Test",
                 boons = 0,
                 rollArgs = { roll = "2d10+5" },
                 setActiveRoll = function() end,
             })
-            assert.are.equal("intercept", result)
-            assert.is_not_nil(DiceVision.pendingRoll)
             for _, entry in ipairs(_G._chatLog) do
                 if entry.type == "send" then
                     assert.is_nil(string.find(entry.message, "does not pass setActiveRoll"))

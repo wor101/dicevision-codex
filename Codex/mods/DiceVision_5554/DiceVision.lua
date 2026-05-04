@@ -1220,25 +1220,18 @@ onBeforeRoll = function(context)
         return nil
     end
 
-    -- Codex compatibility check: when we return "intercept", Codex returns
-    -- early before its `g_activeRoll = activeRoll` assignment. The integration
-    -- branch compensates by passing a setActiveRoll callback that the mod
-    -- invokes after dmhub.Roll. Un-updated Codex does NOT pass that callback,
-    -- so an intercept leaves g_activeRoll nil and the re-roll button silently
-    -- bails ("if g_activeRoll == nil then return end").
-    --
-    -- Without our mod, the same Codex re-rolls just fine -- the initial roll
-    -- falls through Codex's normal `g_activeRoll = activeRoll` path. So we
-    -- must not break that. When setActiveRoll is missing we DEFER to Codex's
-    -- normal flow (return nil, no intercept). The initial roll uses virtual
-    -- dice but re-rolls keep working.
+    -- Codex compatibility check: setActiveRoll is required for re-rolls of
+    -- intercepted rolls to work. Without it, g_activeRoll stays nil after
+    -- our intercept and the re-roll button silently bails. The integration
+    -- branch passes this callback; un-updated Codex does not. Warn once so
+    -- the user understands why re-roll fails. We still intercept so the
+    -- initial roll gets physical dice.
     if not context.setActiveRoll then
-        printf("DV: onBeforeRoll context missing setActiveRoll; deferring to virtual dice to keep re-rolls functional")
+        printf("DV: onBeforeRoll context missing setActiveRoll; re-rolls of intercepted rolls will not work")
         if not DiceVision.warnedMissingSetActiveRoll then
             DiceVision.warnedMissingSetActiveRoll = true
-            chat.Send("[DiceVision] Note: Codex's OnBeforeRoll does not pass setActiveRoll. Falling back to virtual dice for this roll type so re-rolls keep working. (Update Codex for physical-dice support.)")
+            chat.Send("[DiceVision] Note: Codex's OnBeforeRoll does not pass setActiveRoll. Re-rolls of intercepted rolls will silently fail until Codex is updated. (This message appears once per session.)")
         end
-        return nil
     end
 
     print(string.format("DV: onBeforeRoll - roll='%s', boons=%s, description='%s'",
