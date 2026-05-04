@@ -160,6 +160,9 @@ _G.resetDiceVisionState = function()
     DiceVision.codexDeclaredHooks = nil
     DiceVision.hooksRegistered = nil
 
+    -- Reset one-time-warning flags so each test starts cleanly.
+    DiceVision.warnedMissingSetActiveRoll = nil
+
     -- Reset panel state
     DiceVision.panelWaitingForRoll = false
     DiceVision.panelPollStartTime = 0

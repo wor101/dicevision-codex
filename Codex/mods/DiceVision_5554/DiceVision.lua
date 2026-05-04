@@ -1220,6 +1220,20 @@ onBeforeRoll = function(context)
         return nil
     end
 
+    -- Codex compatibility check: setActiveRoll is required for re-rolls of
+    -- intercepted rolls to work. Without it, g_activeRoll stays nil after
+    -- our intercept and the re-roll button silently bails. The integration
+    -- branch passes this callback; un-updated Codex does not. Warn once so
+    -- the user understands why re-roll fails. We still intercept so the
+    -- initial roll gets physical dice.
+    if not context.setActiveRoll then
+        printf("DV: onBeforeRoll context missing setActiveRoll; re-rolls of intercepted rolls will not work")
+        if not DiceVision.warnedMissingSetActiveRoll then
+            DiceVision.warnedMissingSetActiveRoll = true
+            chat.Send("[DiceVision] Note: Codex's OnBeforeRoll does not pass setActiveRoll. Re-rolls of intercepted rolls will silently fail until Codex is updated. (This message appears once per session.)")
+        end
+    end
+
     print(string.format("DV: onBeforeRoll - roll='%s', boons=%s, description='%s'",
         tostring(context.roll), tostring(context.boons), tostring(context.description)))
 

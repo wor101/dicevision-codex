@@ -1201,6 +1201,69 @@ describe("DiceVision", function()
             })
             assert.is_nil(DiceVision.pendingRoll.setActiveRoll)
         end)
+
+        it("warns once when context.setActiveRoll is missing", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            -- First intercept on a Codex without setActiveRoll: should warn.
+            onBeforeRollFn({
+                roll = "2d10+5",
+                description = "First Ability",
+                boons = 0,
+                rollArgs = { roll = "2d10+5" },
+            })
+            local warned = false
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "send"
+                    and string.find(entry.message, "does not pass setActiveRoll")
+                    and string.find(entry.message, "Re%-rolls") then
+                    warned = true
+                    break
+                end
+            end
+            assert.is_true(warned)
+
+            -- Reset state and trigger again: the warning must not re-fire.
+            resetDiceVisionState()
+            -- Preserve the session-scoped flag the way production would
+            -- (resetDiceVisionState clears it in the test harness, so set
+            -- it back so we can verify the dedupe).
+            DiceVision.warnedMissingSetActiveRoll = true
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            onBeforeRollFn({
+                roll = "2d10+5",
+                description = "Second Ability",
+                boons = 0,
+                rollArgs = { roll = "2d10+5" },
+            })
+            local secondWarn = false
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "send"
+                    and string.find(entry.message, "does not pass setActiveRoll") then
+                    secondWarn = true
+                    break
+                end
+            end
+            assert.is_false(secondWarn)
+        end)
+
+        it("does not warn when context.setActiveRoll is present", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            onBeforeRollFn({
+                roll = "2d10+5",
+                description = "Test",
+                boons = 0,
+                rollArgs = { roll = "2d10+5" },
+                setActiveRoll = function() end,
+            })
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "send" then
+                    assert.is_nil(string.find(entry.message, "does not pass setActiveRoll"))
+                end
+            end
+        end)
     end)
 
     -- ============================================================================
