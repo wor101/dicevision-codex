@@ -743,6 +743,69 @@ describe("DiceVision", function()
             end
             assert.is_true(found)
         end)
+
+        it("uses try_get on properties when reading multitargets", function()
+            -- Codex's RollProperties is a strict-typed registered game type.
+            -- Subtypes (e.g., ability-check RollProperties) don't declare a
+            -- multitargets field, and direct field access throws "Attempt
+            -- to read unknown field multitargets in type RollProperties".
+            -- Our onReroll must use try_get to safely return nil instead.
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            local rollPropsStrict = setmetatable({}, {
+                __index = function(_, key)
+                    error("Attempt to read unknown field " .. tostring(key)
+                        .. " in type RollProperties")
+                end,
+            })
+            -- Stub the registered-type's try_get directly so __index isn't
+            -- consulted. (Real Codex stores try_get on the type's metatable
+            -- chain; we approximate here.)
+            rawset(rollPropsStrict, "try_get", function(self, key)
+                return rawget(self, key)
+            end)
+            -- No multitargets field; try_get should return nil cleanly.
+            assert.has_no.errors(function()
+                onRerollFn({
+                    originalRoll = "2d10+5",
+                    amendWithResult = function() end,
+                    rollArgs = {
+                        roll = "2d10+5",
+                        boons = 0,
+                        description = "Ability Check",
+                        properties = rollPropsStrict,
+                    },
+                    activeRoll = { id = "roll-1" },
+                    setActiveRoll = function() end,
+                })
+            end)
+            assert.is_nil(DiceVision.pendingRoll.multitargets)
+        end)
+
+        it("reads multitargets via try_get when properties is a typed object with the field", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            local fakeMultitargets = {
+                { tokenid = "tok-1", boons = 2, banes = 0 },
+            }
+            local rollPropsWithMulti = {
+                multitargets = fakeMultitargets,
+                try_get = function(self, key) return rawget(self, key) end,
+            }
+            onRerollFn({
+                originalRoll = "2d10+5",
+                amendWithResult = function() end,
+                rollArgs = {
+                    roll = "2d10+5",
+                    boons = 0,
+                    description = "Targeted Ability",
+                    properties = rollPropsWithMulti,
+                },
+                activeRoll = { id = "roll-1" },
+                setActiveRoll = function() end,
+            })
+            assert.are.equal(fakeMultitargets, DiceVision.pendingRoll.multitargets)
+        end)
     end)
 
     -- ============================================================================

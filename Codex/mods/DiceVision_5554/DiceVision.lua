@@ -1298,14 +1298,28 @@ onReroll = function(hookData)
 
     print(string.format("DV: onReroll - parsed edges=%d, banes=%d", edges, banes))
 
+    -- properties is a RollProperties registered type (or subtype) with
+    -- strict field access -- direct .multitargets read throws on subtypes
+    -- that don't declare the field (e.g., ability-check RollProperties).
+    -- try_get safely returns nil for missing fields. Falls back to direct
+    -- access for plain-table test stubs that don't define try_get.
+    local rollProps = hookData.rollArgs and hookData.rollArgs.properties
+    local multitargets = nil
+    if rollProps then
+        if type(rollProps.try_get) == "function" then
+            multitargets = rollProps:try_get("multitargets")
+        else
+            multitargets = rawget(rollProps, "multitargets")
+        end
+    end
+
     DiceVision.pendingRoll = {
         rollArgs = hookData.rollArgs,
         originalRoll = hookData.originalRoll,
         description = hookData.rollArgs and hookData.rollArgs.description,
         edges = edges,
         banes = banes,
-        multitargets = hookData.rollArgs and hookData.rollArgs.properties
-            and hookData.rollArgs.properties.multitargets,
+        multitargets = multitargets,
         isReroll = true,
         amendWithResult = hookData.amendWithResult,
         activeRoll = hookData.activeRoll,
