@@ -746,10 +746,12 @@ describe("DiceVision", function()
 
         it("uses try_get on properties when reading multitargets", function()
             -- Codex's RollProperties is a strict-typed registered game type.
-            -- Subtypes (e.g., ability-check RollProperties) don't declare a
-            -- multitargets field, and direct field access throws "Attempt
-            -- to read unknown field multitargets in type RollProperties".
-            -- Our onReroll must use try_get to safely return nil instead.
+            -- Direct field access throws "Attempt to read unknown field X
+            -- in type RollProperties" for fields the active instance never
+            -- had set. multitargets is set imperatively only on multi-
+            -- target rolls (DSRollDialog.lua, EmbeddedRollDialog.lua);
+            -- single-target ability checks never set it, so a direct
+            -- read throws. onReroll must use try_get to safely return nil.
             DiceVision.mode = "replace"
             DiceVision.connected = true
             local rollPropsStrict = setmetatable({}, {
