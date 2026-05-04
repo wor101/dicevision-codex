@@ -765,26 +765,18 @@ handlePendingRoll = function(rollData)
         local net = edges - banes
         if net >= 2 or net <= -2 then
             local calculatedTier = DiceRollLogic.CalculateTierWithEdges(finalTotal, edges, banes)
-            -- rollInfo is a Codex registered game type; direct .properties
-            -- access could throw on subtypes that don't declare it, and the
-            -- previous `or {}` fallback was broken (next line called :try_get
-            -- on a plain table, crashing). Read defensively via try_get with
-            -- a rawget fallback for plain-table stubs.
+            -- rollInfo can be a plain registered-type Lua table (initial roll)
+            -- OR a userdata-backed type like ChatMessageDiceRollInfoLua
+            -- (returned for amended re-rolls). rawget rejects userdata, so
+            -- the safe-everywhere read is via try_get only. If try_get is
+            -- unavailable for whatever reason, we can't read properties
+            -- safely; bail rather than crash.
             local props = nil
-            if type(rollInfo.try_get) == "function" then
+            if rollInfo and type(rollInfo.try_get) == "function" then
                 props = rollInfo:try_get("properties")
-            elseif rollInfo then
-                props = rawget(rollInfo, "properties")
             end
             if props and type(props.try_get) == "function"
                 and not props:try_get("overrideTier") then
-                -- TODO(verify in Phase 3): this assignment writes a
-                -- (possibly-undeclared) field on a strict-typed
-                -- RollProperties instance. If Codex's __newindex rejects
-                -- undeclared writes, every tier-shift roll (net edges/banes
-                -- >= ±2) crashes here. Phase 3 testing should specifically
-                -- exercise edge-2 and bane-2 rolls to confirm this path is
-                -- safe. If it isn't, wrap in pcall + log + chat fallback.
                 props.overrideTier = calculatedTier
                 rollInfo:UploadProperties(props)
             end
