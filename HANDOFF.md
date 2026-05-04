@@ -36,6 +36,30 @@ C# engine processes roll with correct tier/damage
 
 ---
 
+## Codex Hook Requirements & Graceful Degradation
+
+DiceVision registers three callbacks on `RollDialog`:
+
+| Hook | Roll type | Declared in Codex (file:line) |
+|---|---|---|
+| `RollDialog.OnBeforeRoll` | Ability rolls | `Draw Steel UI/DSRollDialog.lua:11` (declaration), `:3308-3309` (call site) |
+| `RollDialog.OnReroll` | Re-rolls | `Draw Steel UI/DSRollDialog.lua:12` (declaration), `:2211-2212` (call site) |
+| `RollDialog.OnBeforeTableRoll` | Random table lookups | `Draw Steel UI/DSRollDialog.lua:13` (declaration), `DMHub Game Hud/RollOnTableDialog.lua:181-211` (call site) |
+
+The hook field on `RollDialog` is declared as `false` by official Codex. DiceVision detects "Codex declared this hook" by the field being non-nil at load time. Once we install our hook functions, the live `RollDialog` table no longer reflects Codex's original declaration state -- subsequent lifecycle events (`removeRollInterceptor`, `setMode("off")`, future cleanup paths) write `false` into every slot. So the source-of-truth is captured **once at load time** into a snapshot.
+
+**Graceful degradation:** DiceVision registers selectively -- only assigning a callback to slots Codex declared. Missing hooks fall back to virtual dice for that roll type only; other roll types are unaffected. The user sees a chat warning naming each missing hook on every user-driven opt-in (`/dv connect`, `/dv mode replace`, the dice-panel toggle). A `printf` log entry is emitted for every missing hook regardless of the verbose-vs-silent path, so a post-mortem trail exists even on the load-time silent path. `/dv status` shows the wired/missing state at any time.
+
+**Two caches:**
+- `DiceVision.codexDeclaredHooks = { ability = bool, reroll = bool, ["table"] = bool }` -- captured once on the first `registerHooks` call from the live `RollDialog` state, then never re-derived. This is the load-bearing snapshot. **Never reset in production.**
+- `DiceVision.hooksRegistered = { ability = bool, reroll = bool, ["table"] = bool }` -- reflects whether each hook is currently wired. Updated by `registerHooks` and cleared by `removeRollInterceptor`. Read by `/dv status`.
+
+**Verbose vs silent paths:** `registerHooks(verbose)` emits chat warnings only when `verbose=true`. User-driven entry points (`/dv connect`, `/dv mode replace`, panel toggle, `/dv refresh`) pass `true`. Internal/setup paths (load-time, hidden mode transitions) pass `false`. The `printf` trail fires unconditionally.
+
+**Escape hatch -- `/dv refresh`:** The snapshot is sticky on purpose, but if the user updates Codex mid-session (changing which hooks are declared) or hits a load-order anomaly that locked the snapshot all-false, `/dv refresh` nils `codexDeclaredHooks` and re-runs `registerHooks(true)`. This is the only legal way to drop the snapshot in production code; do not nil `codexDeclaredHooks` from any other site.
+
+---
+
 ## Official Codex Hook: RollDialog.OnBeforeRoll
 
 ### DSRollDialog.lua (Official, Unmodified)
@@ -111,7 +135,7 @@ local DiceVision = {
     baseUrl = "https://dicevision.dirtyowlbear.com",
     sessionCode = nil,
     connected = false,
-    mode = "off",  -- "off", "chat", or "replace"
+    mode = "off",  -- "off" or "replace"
     isPolling = false,
     pollIntervalMs = 500,
     pendingRoll = nil,
@@ -141,7 +165,19 @@ DiceVision.pendingRoll = {
     description = context.description,
     edges = edges,                    -- From SplitBoons or ParseBoonsFromRollString
     banes = banes,
-    multitargets = context.multitargets
+    multitargets = context.multitargets,
+    setActiveRoll = context.setActiveRoll,  -- Callback to set active roll on dialog
+    -- Re-roll only fields (set by onReroll, nil for initial rolls):
+    isReroll = nil,                   -- true when this is a re-roll
+    amendWithResult = nil,            -- Callback: amendWithResult(totalString)
+    activeRoll = nil,                 -- Original roll object to restore before amend
+    -- Table-roll only fields (set by onBeforeTableRoll, nil for ability rolls):
+    isTableRoll = nil,                -- true when this is a table roll
+    completeWithResult = nil,         -- Callback: completeWithResult(totalInteger)
+    tableRef = nil,                   -- Codex table reference passed by hook
+    tableName = nil,
+    tokenid = nil,                    -- For table rolls only; ability rolls use rollArgs.tokenid
+    guid = nil,
 }
 ```
 
@@ -160,7 +196,63 @@ end
 
 **Fallback for boons reset issue:** If `context.boons == 0` but roll string contains "1 edge" or "2 bane", parses from string (handles boonBar.prepare reset).
 
-#### handlePendingRoll (Lines 658-790)
+#### onReroll Callback (registered on RollDialog.OnReroll)
+
+The `RollDialog.OnReroll` hook is called when a player clicks the re-roll button on an existing roll result. DiceVision intercepts re-rolls the same way it intercepts initial rolls.
+
+**Hook data from DSRollDialog:**
+```lua
+hookData = {
+    originalRoll = rollString,       -- The original roll expression (e.g., "2d10+5")
+    rollArgs = rollArgs,             -- Full rollArgs table (contains .description, .boons, etc.)
+    amendWithResult = function(val), -- Callback: pass new total as string to amend the roll
+    activeRoll = rollObject,         -- The original active roll object
+    setActiveRoll = function(roll),  -- Callback to restore g_activeRoll before amend
+}
+```
+
+**Re-roll flow:**
+1. `onReroll` intercepts, stores `pendingRoll` with `isReroll=true`
+2. Physical dice arrive, `handlePendingRoll` processes them
+3. Re-roll path: calls `setActiveRoll(activeRoll)` to restore the roll context
+4. Sends `DiceVisionRollMessage` to chat (visual display)
+5. Calls `amendWithResult(tostring(finalTotal))` to update the roll result
+6. Unlike initial rolls, does NOT call `dmhub.Roll()` -- the amend engine handles it
+
+**Important:** `amendWithResult` receives `finalTotal` (with edge/bane modifier applied), because the Codex amend engine does NOT re-apply edge/bane modifiers.
+
+#### onBeforeTableRoll Callback (registered on RollDialog.OnBeforeTableRoll)
+
+The `RollDialog.OnBeforeTableRoll` hook is called when a player triggers a random table lookup (e.g., 1d100 wild magic table, 1d20 treasure table). DiceVision intercepts these the same way it intercepts initial rolls and re-rolls.
+
+**Hook data from DSRollDialog:**
+```lua
+hookData = {
+    roll = rollString,                  -- e.g., "1d100" or "1d20+3"
+    description = string,
+    creature = creature,
+    tokenid = tokenId,
+    properties = props,
+    tableRef = tableRef,                -- Codex table reference object
+    tableName = string,
+    guid = string,
+    completeWithResult = function(int), -- Callback: pass final total as integer
+}
+```
+
+Note the shape differs from `OnBeforeRoll` / `OnReroll`: there is no `boons`, `banes`, `multitargets`, `rollArgs`, `activeRoll`, or `setActiveRoll`. Table rolls are simple lookups and skip all edge/bane/tier logic.
+
+**Table-roll flow:**
+1. `onBeforeTableRoll` intercepts, stores `pendingRoll` with `isTableRoll=true`
+2. Physical dice arrive; `handlePendingRoll` enters the table-roll branch (must run before the ability-roll dispatcher because that path requires `rollArgs`, which table rolls do not carry)
+3. Detects d100 percentile pair via `DiceRollLogic.detectPercentilePair` (handles "00"+"0" -> 100 case)
+4. Sends `DiceVisionRollMessage` to chat with `rollSource="table"`
+5. Calls `completeWithResult(total)` -- `total` is an **integer**, not a string (different from `amendWithResult`)
+6. Does NOT call `dmhub.Roll()` and does NOT apply edge/bane math
+
+**Important:** On timeout / error / mode-off, table rolls are silently abandoned with a chat notice ("Table roll abandoned. Re-trigger to retry."). Unlike re-rolls, there is no synchronous fallback -- `completeWithResult` requires an integer, and there is no way to evaluate the table-roll formula locally without invoking the async `dmhub.Roll`.
+
+#### handlePendingRoll
 
 **Two code paths based on targeting:**
 
@@ -253,7 +345,7 @@ Edges and banes cancel 1-for-1. Apply rules based on net (edges - banes):
 | `/dv connect <code>` | Connect to DiceVision session |
 | `/dv disconnect` | Disconnect from session |
 | `/dv status` | Show connection status |
-| `/dv mode <off\|chat\|replace>` | Set operation mode |
+| `/dv mode <off\|replace>` | Set operation mode |
 | `/dv rules <subcommand>` | Configure dice processing rules |
 | `/dv test` | Test API connection |
 

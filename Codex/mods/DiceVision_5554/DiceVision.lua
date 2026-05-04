@@ -68,9 +68,6 @@ local function generateRequestId()
     return tostring(os.time()) .. "-" .. tostring(math.random(1000, 9999))
 end
 
--- Forward declaration for functions called before definition
-local hideWaitingDialog
-
 -- Expose for DVDicePanel.lua
 DiceVision.generateRequestId = generateRequestId
 
@@ -355,11 +352,13 @@ end
 local startPolling          -- Used by onBeforeRoll
 local stopPolling
 local removeRollInterceptor
-local checkRollTimeout      -- Used by longPollForRolls
+local abandonPendingRoll    -- Used by longPollForRolls, setMode
 local handlePendingRoll     -- Used by handleDiceVisionRoll
 local postRollToChat        -- Used by handleDiceVisionRoll
 local longPollForRolls      -- Recursive call
 local onBeforeRoll          -- Used by /dv connect, registered on RollDialog.OnBeforeRoll
+local onReroll              -- Used by /dv connect, registered on RollDialog.OnReroll
+local onBeforeTableRoll     -- Used by /dv connect, registered on RollDialog.OnBeforeTableRoll
 
 -- ============================================================================
 -- API Communication
@@ -430,6 +429,32 @@ local function handleDiceVisionRoll(rollData)
     end
 end
 
+abandonPendingRoll = function()
+    local pendingRoll = DiceVision.pendingRoll
+    if not pendingRoll then return end
+    local rollArgs = pendingRoll.rollArgs
+
+    DiceVision.waitingForRoll = false
+    DiceVision.pendingRoll = nil
+    DiceVision.currentRequestId = generateRequestId()
+    stopPolling()
+
+    if pendingRoll.isReroll and pendingRoll.amendWithResult then
+        if pendingRoll.setActiveRoll and pendingRoll.activeRoll then
+            pendingRoll.setActiveRoll(pendingRoll.activeRoll)
+        end
+        pendingRoll.amendWithResult(pendingRoll.originalRoll)
+    elseif pendingRoll.isTableRoll then
+        printf("DV: table roll abandoned - tableName='%s', description='%s', originalRoll='%s', elapsedMs=%d",
+            tostring(pendingRoll.tableName), tostring(pendingRoll.description),
+            tostring(pendingRoll.originalRoll),
+            math.floor(dmhub.Time() * 1000 - (DiceVision.rollStartTime or 0)))
+        chat.Send("[DiceVision] Table roll abandoned. Re-trigger to retry.")
+    elseif rollArgs then
+        dmhub.Roll(rollArgs)
+    end
+end
+
 longPollForRolls = function()
     if not DiceVision.connected or not DiceVision.sessionCode then
         return
@@ -465,19 +490,13 @@ longPollForRolls = function()
             DiceVision.isPolling = false
 
             -- Replace mode timeout: if still waiting, fall back to virtual dice
+            -- (table rolls have no virtual fallback; abandonPendingRoll emits the
+            -- table-roll-specific notice on its own).
             if DiceVision.waitingForRoll then
-                local rollArgs = DiceVision.pendingRoll and DiceVision.pendingRoll.rollArgs
-
-                chat.Send("[DiceVision] Physical dice timeout. Falling back to virtual dice...")
-                DiceVision.waitingForRoll = false
-                DiceVision.pendingRoll = nil
-                DiceVision.currentRequestId = generateRequestId()
-                hideWaitingDialog()
-                stopPolling()
-
-                if rollArgs then
-                    dmhub.Roll(rollArgs)
+                if not (DiceVision.pendingRoll and DiceVision.pendingRoll.isTableRoll) then
+                    chat.Send("[DiceVision] Physical dice timeout. Falling back to virtual dice...")
                 end
+                abandonPendingRoll()
             end
 
             -- Panel timeout: if still waiting, roll didn't arrive
@@ -492,19 +511,13 @@ longPollForRolls = function()
             DiceVision.isPolling = false
 
             -- Replace mode: fall back to virtual dice on error
+            -- (table rolls have no virtual fallback; abandonPendingRoll emits the
+            -- table-roll-specific notice on its own).
             if DiceVision.waitingForRoll then
-                local rollArgs = DiceVision.pendingRoll and DiceVision.pendingRoll.rollArgs
-
-                chat.Send("[DiceVision] Connection error. Falling back to virtual dice...")
-                DiceVision.waitingForRoll = false
-                DiceVision.pendingRoll = nil
-                DiceVision.currentRequestId = generateRequestId()
-                hideWaitingDialog()
-                stopPolling()
-
-                if rollArgs then
-                    dmhub.Roll(rollArgs)
+                if not (DiceVision.pendingRoll and DiceVision.pendingRoll.isTableRoll) then
+                    chat.Send("[DiceVision] Connection error. Falling back to virtual dice...")
                 end
+                abandonPendingRoll()
             end
 
             -- Panel: clear waiting state on error
@@ -520,6 +533,34 @@ end
 -- ============================================================================
 -- Level 1: Chat Integration
 -- ============================================================================
+
+local function buildDiceMessage(rollDice, pendingRoll)
+    local processedDice, droppedDice = DiceRollLogic.applyDiceRules(rollDice, pendingRoll)
+    local diceForMessage = {}
+    local diceSum = 0
+    for _, die in ipairs(processedDice) do
+        diceForMessage[#diceForMessage + 1] = {
+            faces = DiceRollLogic.getDiceFaces(die.type),
+            value = die.value,
+            originalValue = die.originalValue,
+        }
+        diceSum = diceSum + die.value
+    end
+    if droppedDice and #droppedDice > 0 then
+        local droppedValues = {}
+        for _, die in ipairs(droppedDice) do
+            diceForMessage[#diceForMessage + 1] = {
+                faces = DiceRollLogic.getDiceFaces(die.type),
+                value = die.value,
+                originalValue = die.originalValue,
+                dropped = true,
+            }
+            droppedValues[#droppedValues + 1] = tostring(die.value)
+        end
+        print("[DiceVision] Dropped dice: " .. table.concat(droppedValues, ", "))
+    end
+    return diceForMessage, diceSum
+end
 
 postRollToChat = function(rollData)
     -- Check for percentile (d100) pair before applying standard rules
@@ -549,32 +590,7 @@ postRollToChat = function(rollData)
     end
 
     -- Standard path: apply dice rules (including 0->10 mapping for standard d10s)
-    local processedDice, droppedDice = DiceRollLogic.applyDiceRules(rollData.dice, nil)
-    local diceForMessage = {}
-    local diceSum = 0
-    for _, die in ipairs(processedDice) do
-        local faces = DiceRollLogic.getDiceFaces(die.type)
-        diceForMessage[#diceForMessage + 1] = {
-            faces = faces,
-            value = die.value,
-            originalValue = die.originalValue,
-        }
-        diceSum = diceSum + die.value
-    end
-    if droppedDice and #droppedDice > 0 then
-        local droppedValues = {}
-        for _, die in ipairs(droppedDice) do
-            local faces = DiceRollLogic.getDiceFaces(die.type)
-            diceForMessage[#diceForMessage + 1] = {
-                faces = faces,
-                value = die.value,
-                originalValue = die.originalValue,
-                dropped = true,
-            }
-            droppedValues[#droppedValues + 1] = tostring(die.value)
-        end
-        print("[DiceVision] Dropped dice: " .. table.concat(droppedValues, ", "))
-    end
+    local diceForMessage, diceSum = buildDiceMessage(rollData.dice, nil)
     local total = diceSum
     local tier = DiceRollLogic.calculateTier(total)
     local message = DiceVisionRollMessage.new{
@@ -599,37 +615,6 @@ local function showWaitingDialog()
     chat.Send("[DiceVision] Waiting for physical dice roll...")
 end
 
-hideWaitingDialog = function()
-    -- TODO: Hide the waiting indicator
-end
-
-local function postDiceVisionRollToChat(rollData, rollInfo, pendingRoll) -- luacheck: ignore
-    local modifier = DiceRollLogic.extractModifierFromRoll(pendingRoll.roll)
-    print(string.format("DV: postDiceVisionRollToChat - modifier=%d, total=%d, tier=%s",
-        modifier, rollInfo.total, tostring(rollInfo.tiers)))
-    local diceForMessage = {}
-    for _, die in ipairs(rollData.dice) do
-        local faces = DiceRollLogic.getDiceFaces(die.type)
-        diceForMessage[#diceForMessage + 1] = {
-            faces = faces,
-            value = die.value
-        }
-    end
-    local tokenid = pendingRoll.tokenid
-    if not tokenid and pendingRoll.creature then
-        tokenid = dmhub.LookupTokenId(pendingRoll.creature)
-    end
-    local message = DiceVisionRollMessage.new{
-        description = pendingRoll.description or "Roll",
-        dice = diceForMessage,
-        modifier = modifier,
-        total = rollInfo.total,
-        tier = rollInfo.tiers,
-        tokenid = tokenid,
-    }
-    chat.SendCustom(message)
-end
-
 handlePendingRoll = function(rollData)
     if not DiceVision.pendingRoll then
         return false
@@ -638,7 +623,6 @@ handlePendingRoll = function(rollData)
     DiceVision.pendingRoll = nil
     DiceVision.waitingForRoll = false
     DiceVision.currentRequestId = generateRequestId()
-    hideWaitingDialog()
 
     -- Stop polling after roll is handled (for replace mode)
     if DiceVision.mode == "replace" then
@@ -648,33 +632,38 @@ handlePendingRoll = function(rollData)
     local modifier = DiceRollLogic.extractModifierFromRoll(pendingRoll.originalRoll)
     print(string.format("DV: handlePendingRoll - originalRoll='%s', modifier=%d",
         tostring(pendingRoll.originalRoll), modifier))
-    local diceSum = 0
-    local processedDice, droppedDice = DiceRollLogic.applyDiceRules(rollData.dice, pendingRoll)
-    local diceForMessage = {}
-    for i, die in ipairs(processedDice) do
-        local faces = DiceRollLogic.getDiceFaces(die.type)
-        diceSum = diceSum + die.value
-        diceForMessage[i] = {
-            faces = faces,
-            value = die.value,
-            originalValue = die.originalValue,
-        }
-    end
-    print(string.format("DV: handlePendingRoll - diceSum=%d, processedDice=%d, droppedDice=%d",
-        diceSum, #processedDice, droppedDice and #droppedDice or 0))
-    if droppedDice and #droppedDice > 0 then
-        local droppedValues = {}
-        for _, die in ipairs(droppedDice) do
-            local faces = DiceRollLogic.getDiceFaces(die.type)
-            diceForMessage[#diceForMessage + 1] = {
-                faces = faces,
-                value = die.value,
-                originalValue = die.originalValue,
-                dropped = true,
-            }
-            droppedValues[#droppedValues + 1] = tostring(die.value)
+    local diceForMessage, diceSum = buildDiceMessage(rollData.dice, pendingRoll)
+
+    -- Table-roll path: completeWithResult takes an integer; no edge/bane/tier math
+    if pendingRoll.isTableRoll then
+        if not pendingRoll.completeWithResult then
+            print(string.format("DV: ERROR - table roll missing completeWithResult; tableName='%s'",
+                tostring(pendingRoll.tableName)))
+            chat.Send("[DiceVision] Internal error: table roll callback missing. Re-trigger to retry.")
+            return false
         end
-        print("[DiceVision] Dropped dice: " .. table.concat(droppedValues, ", "))
+        local percentile = DiceRollLogic.detectPercentilePair(rollData.dice)
+        local total
+        local isPercentile = false
+        if percentile then
+            total = percentile.total
+            isPercentile = true
+        else
+            total = diceSum + modifier
+        end
+        local visualMessage = DiceVisionRollMessage.new{
+            description = pendingRoll.description or "Table Roll",
+            dice = diceForMessage,
+            modifier = modifier,
+            total = total,
+            tier = nil,
+            tokenid = pendingRoll.tokenid,
+            rollSource = "table",
+            isPercentile = isPercentile,
+        }
+        chat.SendCustom(visualMessage)
+        pendingRoll.completeWithResult(total)
+        return true
     end
 
     local edges = pendingRoll.edges or 0
@@ -708,7 +697,49 @@ handlePendingRoll = function(rollData)
         tokenid = tokenid,
         rollSource = "ability",
     }
-    rollArgs.instant = true
+
+    -- Re-roll path: use amendWithResult callback instead of dmhub.Roll
+    if pendingRoll.isReroll and pendingRoll.amendWithResult then
+        if pendingRoll.setActiveRoll and pendingRoll.activeRoll then
+            pendingRoll.setActiveRoll(pendingRoll.activeRoll)
+        end
+        -- Re-rolls bypass our dmhub.Roll complete-wrapper, so the tier-
+        -- shift override that fires for net edges/banes >= +/-2 isn't
+        -- applied automatically. Write overrideTier directly onto the
+        -- inherited rollArgs.properties before amending; the integration
+        -- branch's doRerollAmend passes properties through so the amend
+        -- engine picks it up. Re-uses calculatedTier which already
+        -- accounts for the tier-shift when applicable.
+        local net = edges - banes
+        if (net >= 2 or net <= -2)
+            and pendingRoll.rollArgs and pendingRoll.rollArgs.properties
+            and type(pendingRoll.rollArgs.properties.try_get) == "function" then
+            local props = pendingRoll.rollArgs.properties
+            props.overrideTier = tier
+        end
+        chat.SendCustom(visualMessage)
+        pendingRoll.amendWithResult(tostring(finalTotal))
+        return true
+    end
+
+    -- Shallow-copy the TOP LEVEL of rollArgs to isolate our deterministic-
+    -- total mutations (roll/boons/banes/instant). Codex holds the same
+    -- rollArgs reference in g_activeRollArgs; on un-updated Codex the
+    -- re-roll dialog reads g_activeRollArgs.roll and amends with it, so
+    -- mutating roll in place would make the amend re-roll a literal value
+    -- and silently fail. The copy isolates that.
+    --
+    -- We do NOT copy rollArgs.properties: Codex's properties is a
+    -- registered game type with metamethods (try_get etc.) and a shallow
+    -- copy strips the metatable, breaking downstream code that calls
+    -- properties:try_get(...) (ActionLogPanel, MCDMAbilityRollBehaviors).
+    -- Keeping the same properties reference means our multitargets[1]
+    -- mutation below leaks into the caller's properties, but that mutation
+    -- pre-existed our copy fix and Codex already tolerates it.
+    local rollArgsForDmhub = {}
+    for k, v in pairs(rollArgs) do rollArgsForDmhub[k] = v end
+
+    rollArgsForDmhub.instant = true
 
     print(string.format("DV: handlePendingRoll - isNonTargeted=%s, rollArgs.roll='%s'",
         tostring(isNonTargeted), tostring(rollArgs.roll)))
@@ -719,37 +750,47 @@ handlePendingRoll = function(rollData)
         if boonsValue ~= 0 and GameSystem and GameSystem.ApplyBoons then
             local rollWithBoons = GameSystem.ApplyBoons(tostring(baseTotal), boonsValue)
             print("[DiceVision] GameSystem.ApplyBoons('" .. tostring(baseTotal) .. "', " .. boonsValue .. ") returned: '" .. tostring(rollWithBoons) .. "'")
-            rollArgs.roll = rollWithBoons
+            rollArgsForDmhub.roll = rollWithBoons
         else
             print("[DiceVision] No boons to apply or GameSystem.ApplyBoons not available, using finalTotal:", finalTotal)
-            rollArgs.roll = tostring(finalTotal)
+            rollArgsForDmhub.roll = tostring(finalTotal)
         end
     else
         local net = edges - banes
-        rollArgs.roll = tostring(baseTotal)
+        rollArgsForDmhub.roll = tostring(baseTotal)
         if net > 0 then
-            rollArgs.boons = net
-            rollArgs.banes = 0
+            rollArgsForDmhub.boons = net
+            rollArgsForDmhub.banes = 0
         elseif net < 0 then
-            rollArgs.boons = 0
-            rollArgs.banes = -net
+            rollArgsForDmhub.boons = 0
+            rollArgsForDmhub.banes = -net
         else
-            rollArgs.boons = 0
-            rollArgs.banes = 0
+            rollArgsForDmhub.boons = 0
+            rollArgsForDmhub.banes = 0
         end
-        rollArgs.properties = rollArgs.properties or {}
-        rollArgs.properties.multitargets = pendingRoll.multitargets
-        rollArgs.properties.multitargets[1].boons = 0
-        rollArgs.properties.multitargets[1].banes = 0
+        rollArgsForDmhub.properties = rollArgsForDmhub.properties or {}
+        rollArgsForDmhub.properties.multitargets = pendingRoll.multitargets
+        rollArgsForDmhub.properties.multitargets[1].boons = 0
+        rollArgsForDmhub.properties.multitargets[1].banes = 0
     end
 
     local originalComplete = rollArgs.complete
-    rollArgs.complete = function(rollInfo)
+    rollArgsForDmhub.complete = function(rollInfo)
         local net = edges - banes
         if net >= 2 or net <= -2 then
             local calculatedTier = DiceRollLogic.CalculateTierWithEdges(finalTotal, edges, banes)
-            local props = rollInfo.properties or {}
-            if not props:try_get("overrideTier") then
+            -- rollInfo can be a plain registered-type Lua table (initial roll)
+            -- OR a userdata-backed type like ChatMessageDiceRollInfoLua
+            -- (returned for amended re-rolls). rawget rejects userdata, so
+            -- the safe-everywhere read is via try_get only. If try_get is
+            -- unavailable for whatever reason, we can't read properties
+            -- safely; bail rather than crash.
+            local props = nil
+            if rollInfo and type(rollInfo.try_get) == "function" then
+                props = rollInfo:try_get("properties")
+            end
+            if props and type(props.try_get) == "function"
+                and not props:try_get("overrideTier") then
                 props.overrideTier = calculatedTier
                 rollInfo:UploadProperties(props)
             end
@@ -760,44 +801,102 @@ handlePendingRoll = function(rollData)
         end
     end
 
-    dmhub.Roll(rollArgs)
+    local roll = dmhub.Roll(rollArgsForDmhub)
+    if pendingRoll.setActiveRoll and roll then
+        pendingRoll.setActiveRoll(roll)
+    end
     return true
 end
 
-checkRollTimeout = function() -- luacheck: ignore
-    if DiceVision.waitingForRoll then
-        local elapsed = (dmhub.Time() * 1000) - DiceVision.rollStartTime
-        if elapsed > DiceVision.rollTimeout then
-            chat.Send("[DiceVision] Timeout waiting for physical dice. Roll cancelled - try again.")
-            DiceVision.waitingForRoll = false
-            DiceVision.pendingRoll = nil
-            DiceVision.currentRequestId = generateRequestId()
-            hideWaitingDialog()
+-- Hooks DiceVision registers on RollDialog. Order here drives /dv status
+-- and chat-warning ordering. spec.key indexes both DiceVision.codexDeclaredHooks
+-- (the static snapshot of Codex's declarations) and DiceVision.hooksRegistered
+-- (the runtime view of which slots are currently wired) -- see registerHooks.
+local HOOK_SPECS = {
+    { name = "OnBeforeRoll",      key = "ability", label = "ability rolls" },
+    { name = "OnReroll",          key = "reroll",  label = "re-rolls" },
+    { name = "OnBeforeTableRoll", key = "table",   label = "table rolls" },
+}
 
-            -- Stop polling on timeout (for replace mode)
-            if DiceVision.mode == "replace" then
-                stopPolling()
+local function getHookFn(specName)
+    if specName == "OnBeforeRoll" then return onBeforeRoll end
+    if specName == "OnReroll" then return onReroll end
+    if specName == "OnBeforeTableRoll" then return onBeforeTableRoll end
+end
+
+-- Register hooks selectively: only assign to slots Codex declares.
+-- Caches the result on DiceVision.hooksRegistered for /dv status. When
+-- verbose=true, emits a chat warning per missing hook; the printf trail
+-- fires unconditionally so the silent paths (load-time, internal setMode)
+-- still leave a post-mortem record.
+--
+-- DiceVision.codexDeclaredHooks is a snapshot of Codex's original
+-- declaration state, captured once on the first call and never re-derived
+-- in production (test-reset is the only legal nilling -- see test_setup.lua).
+-- Once DiceVision installs its hook functions the live RollDialog table no
+-- longer reflects Codex's intent: any code that mutates the slots after
+-- that point (removeRollInterceptor today; any future teardown path) writes
+-- false into every slot. A live re-probe would then misread "a slot
+-- DiceVision cleared on teardown" as "Codex declared this hook" and
+-- silently re-wire a slot Codex never invokes. The /dv refresh command is
+-- the user-visible escape hatch for legitimate re-probes (e.g. after a
+-- Codex hot-reload changes which hooks are declared).
+local function registerHooks(verbose)
+    local registered = { ability = false, reroll = false, ["table"] = false }
+    if not RollDialog then
+        printf("DV: RollDialog global is nil; no hooks registered")
+        if verbose then
+            chat.Send("[DiceVision] Warning: RollDialog not available; physical dice will not intercept any rolls.")
+        end
+        -- Lock the snapshot so a future call does not re-derive from a
+        -- newly-appearing-but-already-mutated RollDialog.
+        if DiceVision.codexDeclaredHooks == nil then
+            DiceVision.codexDeclaredHooks = { ability = false, reroll = false, ["table"] = false }
+        end
+        DiceVision.hooksRegistered = registered
+        return registered
+    end
+    if DiceVision.codexDeclaredHooks == nil then
+        local snapshot = {}
+        for _, spec in ipairs(HOOK_SPECS) do
+            snapshot[spec.key] = (RollDialog[spec.name] ~= nil)
+        end
+        DiceVision.codexDeclaredHooks = snapshot
+    end
+    for _, spec in ipairs(HOOK_SPECS) do
+        if not DiceVision.codexDeclaredHooks[spec.key] then
+            printf("DV: hook RollDialog.%s missing; %s will use virtual dice", spec.name, spec.label)
+            if verbose then
+                chat.Send(string.format(
+                    "[DiceVision] Warning: Codex does not expose RollDialog.%s (hook missing); %s will use virtual dice. (Requires a Codex build that declares this hook.)",
+                    spec.name, spec.label))
             end
+        else
+            RollDialog[spec.name] = getHookFn(spec.name)
+            registered[spec.key] = true
         end
     end
-
-    -- Panel roll timeout
-    if DiceVision.panelWaitingForRoll then
-        local elapsed = (dmhub.Time() * 1000) - DiceVision.panelPollStartTime
-        if elapsed > DiceVision.rollTimeout then
-            chat.Send("[DiceVision] Timeout waiting for dice. Try again.")
-            DiceVision.panelWaitingForRoll = false
-            DiceVision.panelRequestId = generateRequestId()
-        end
-    end
+    DiceVision.hooksRegistered = registered
+    return registered
 end
 
 removeRollInterceptor = function()
     DiceVision.pendingRoll = nil
     DiceVision.waitingForRoll = false
     DiceVision.currentRequestId = nil
+    DiceVision.hooksRegistered = { ability = false, reroll = false, ["table"] = false }
     if RollDialog then
-        RollDialog.OnBeforeRoll = false
+        -- Only clear slots Codex originally declared. Slots that were nil
+        -- pre-load must stay nil so a future snapshot re-capture (e.g.,
+        -- across a Codex mod-reload where codexDeclaredHooks resets but
+        -- RollDialog persists) correctly identifies them as undeclared.
+        local declared = DiceVision.codexDeclaredHooks
+            or { ability = true, reroll = true, ["table"] = true }
+        for _, spec in ipairs(HOOK_SPECS) do
+            if declared[spec.key] then
+                RollDialog[spec.name] = false
+            end
+        end
     end
 end
 
@@ -822,8 +921,10 @@ end
 DiceVision.startPolling = startPolling
 DiceVision.postRollToChat = postRollToChat
 
--- Public mode setter (used by /dv mode command and DVDicePanel toggle)
-DiceVision.setMode = function(newMode)
+-- Public mode setter (used by /dv mode command and DVDicePanel toggle).
+-- Pass verbose=true on user-driven transitions to "replace" so missing-hook
+-- warnings surface to chat. Internal/setup callers default to silent.
+DiceVision.setMode = function(newMode, verbose)
     if newMode ~= "off" and newMode ~= "replace" then
         return false
     end
@@ -834,26 +935,34 @@ DiceVision.setMode = function(newMode)
 
     if newMode == "off" then
         -- If a pending ability roll exists, fall back to virtual dice
-        if DiceVision.waitingForRoll and DiceVision.pendingRoll then
-            local rollArgs = DiceVision.pendingRoll.rollArgs
-            DiceVision.waitingForRoll = false
-            DiceVision.pendingRoll = nil
-            DiceVision.currentRequestId = generateRequestId()
-            hideWaitingDialog()
-            if rollArgs then
-                dmhub.Roll(rollArgs)
-            end
-        end
+        abandonPendingRoll()
         stopPolling()
         removeRollInterceptor()
     elseif newMode == "replace" then
-        -- Re-register callback (removeRollInterceptor sets it to false)
-        if RollDialog then
-            RollDialog.OnBeforeRoll = onBeforeRoll
-        end
+        registerHooks(verbose == true)
     end
 
     return true
+end
+
+-- Panel-toggle entry point (called from DVDicePanel.lua). Extracted from
+-- the panel click handler so this exact contract -- "compute opposite mode,
+-- pass verbose on replace, emit confirmation chat" -- has a unit-testable
+-- seam. Guards on DiceVision.connected internally so any future caller
+-- cannot silently bypass the precondition. Returns the new mode for tests
+-- to assert toggle direction without re-reading DiceVision.mode; the panel
+-- currently ignores it. If a UI caller starts consuming this, treat as
+-- load-bearing public API.
+DiceVision._panelToggle = function()
+    if not DiceVision.connected then
+        printf("DV: _panelToggle called while disconnected; ignoring")
+        return nil
+    end
+    local oldMode = DiceVision.mode
+    local newMode = (oldMode == "replace") and "off" or "replace"
+    DiceVision.setMode(newMode, newMode == "replace")
+    chat.Send("[DiceVision] Mode changed: " .. oldMode .. " -> " .. newMode)
+    return newMode
 end
 
 -- ============================================================================
@@ -881,10 +990,10 @@ Commands.dv = function(args)
         validateSession(function(success, result)
             if success then
                 DiceVision.mode = "replace"
-                -- Ensure callback is registered (handles load order)
-                if RollDialog then
-                    RollDialog.OnBeforeRoll = onBeforeRoll
-                end
+                -- Probe-and-register: warn the user about any hook the Codex
+                -- install is missing so they know which roll types will fall
+                -- back to virtual dice.
+                registerHooks(true)
                 chat.Send("[DiceVision] Connected! Ready to capture dice rolls.")
             else
                 chat.Send("[DiceVision] Connection failed: " .. tostring(result))
@@ -893,6 +1002,7 @@ Commands.dv = function(args)
         end)
 
     elseif subcommand == "disconnect" then
+        abandonPendingRoll()
         stopPolling()
         removeRollInterceptor()
         DiceVision.sessionCode = nil
@@ -901,14 +1011,38 @@ Commands.dv = function(args)
         chat.Send("[DiceVision] Disconnected")
 
     elseif subcommand == "status" then
+        local hooks = DiceVision.hooksRegistered
+            or { ability = false, reroll = false, ["table"] = false }
+        local function yn(v) return v and "YES" or "NO" end
+        local missing = {}
+        for _, spec in ipairs(HOOK_SPECS) do
+            if not hooks[spec.key] then
+                missing[#missing + 1] = "RollDialog." .. spec.name
+            end
+        end
         local status = string.format(
-            "[DiceVision] Status:\n  Connected: %s\n  Session: %s\n  Mode: %s\n  Polling: %s",
+            "[DiceVision] Status:\n  Connected: %s\n  Session: %s\n  Mode: %s\n  Polling: %s\n  Hooks: ability=%s, reroll=%s, table=%s",
             tostring(DiceVision.connected),
             DiceVision.sessionCode or "none",
             DiceVision.mode,
-            tostring(DiceVision.isPolling)
+            tostring(DiceVision.isPolling),
+            yn(hooks.ability), yn(hooks.reroll), yn(hooks["table"])
         )
+        if #missing > 0 then
+            status = status .. "\n  Missing Codex hooks: " .. table.concat(missing, ", ")
+        end
         chat.Send(status)
+
+    elseif subcommand == "refresh" then
+        -- Drop the cached snapshot so the next register reads RollDialog
+        -- afresh. The user-visible escape hatch for two failure shapes:
+        -- (1) Codex hot-reload changes which hooks are declared,
+        -- (2) snapshot was locked all-false at first probe (RollDialog nil,
+        -- or RollDialog present but no hook slots declared yet).
+        printf("DV: /dv refresh invoked")
+        DiceVision.codexDeclaredHooks = nil
+        registerHooks(true)
+        chat.Send("[DiceVision] Hook probe refreshed. See /dv status for current state.")
 
     elseif subcommand == "mode" then
         local newMode = parts[2]
@@ -919,8 +1053,15 @@ Commands.dv = function(args)
         end
 
         local oldMode = DiceVision.mode
-        DiceVision.setMode(newMode)
-        chat.Send("[DiceVision] Mode changed: " .. oldMode .. " -> " .. newMode)
+        if oldMode == newMode then
+            chat.Send("[DiceVision] Already in mode " .. newMode .. ". Use /dv refresh to re-probe Codex hooks.")
+        else
+            -- User-driven mode change: surface missing-hook warnings on the
+            -- replace transition so the player sees the same diagnostic as
+            -- /dv connect.
+            DiceVision.setMode(newMode, newMode == "replace")
+            chat.Send("[DiceVision] Mode changed: " .. oldMode .. " -> " .. newMode)
+        end
 
     elseif subcommand == "test" then
         chat.Send("[DiceVision] Testing API connection...")
@@ -1063,14 +1204,23 @@ Commands.dv = function(args)
 [DiceVision] Commands:
   /dv connect <code>  - Connect to DiceVision session
   /dv disconnect      - Disconnect from session
-  /dv status          - Show connection status
+  /dv status          - Show connection status (includes Codex hook state)
   /dv mode <mode>     - Set mode: off or replace
+  /dv refresh         - Re-probe Codex hooks (use after Codex update)
   /dv rules           - Configure dice processing rules
   /dv test            - Test API connection
 
 Modes:
   off     - DiceVision disabled
   replace - Physical rolls replace virtual dice
+
+Codex requirements:
+  DiceVision uses three RollDialog hooks. Missing hooks fall back to
+  virtual dice for that roll type only.
+    OnBeforeRoll       - ability rolls
+    OnReroll           - re-rolls
+    OnBeforeTableRoll  - random table lookups
+  Run /dv status to see which hooks the current Codex install supports.
 ]=])
     end
 end
@@ -1090,7 +1240,22 @@ onBeforeRoll = function(context)
     end
 
     if DiceVision.waitingForRoll then
+        chat.Send("[DiceVision] Another roll is in progress; this roll will use virtual dice.")
         return nil
+    end
+
+    -- Codex compatibility check: setActiveRoll is required for re-rolls of
+    -- intercepted rolls to work. Without it, g_activeRoll stays nil after
+    -- our intercept and the re-roll button silently bails. The integration
+    -- branch passes this callback; un-updated Codex does not. Warn once so
+    -- the user understands why re-roll fails. We still intercept so the
+    -- initial roll gets physical dice.
+    if not context.setActiveRoll then
+        printf("DV: onBeforeRoll context missing setActiveRoll; re-rolls of intercepted rolls will not work")
+        if not DiceVision.warnedMissingSetActiveRoll then
+            DiceVision.warnedMissingSetActiveRoll = true
+            chat.Send("[DiceVision] Note: Codex's OnBeforeRoll does not pass setActiveRoll. Re-rolls of intercepted rolls will silently fail until Codex is updated. (This message appears once per session.)")
+        end
     end
 
     print(string.format("DV: onBeforeRoll - roll='%s', boons=%s, description='%s'",
@@ -1112,6 +1277,7 @@ onBeforeRoll = function(context)
         edges = edges,
         banes = banes,
         multitargets = context.multitargets,
+        setActiveRoll = context.setActiveRoll,
     }
 
     DiceVision.waitingForRoll = true
@@ -1128,9 +1294,129 @@ onBeforeRoll = function(context)
     return "intercept"
 end
 
--- Register callback (guarded for load order)
-if RollDialog then
-    RollDialog.OnBeforeRoll = onBeforeRoll
+-- ============================================================================
+-- RollDialog.OnReroll Callback (official Codex hook API)
+-- ============================================================================
+
+onReroll = function(hookData)
+    if not hookData then return nil end
+    if not DiceVision then return nil end
+
+    if DiceVision.mode ~= "replace" or not DiceVision.connected then
+        return nil
+    end
+
+    if DiceVision.waitingForRoll then
+        chat.Send("[DiceVision] Another roll is in progress; this roll will use virtual dice.")
+        return nil
+    end
+
+    print(string.format("DV: onReroll - originalRoll='%s', description='%s'",
+        tostring(hookData.originalRoll), tostring(hookData.rollArgs and hookData.rollArgs.description)))
+
+    local edges, banes = DiceRollLogic.ParseBoonsFromRollString(hookData.originalRoll)
+
+    if edges == 0 and banes == 0 and hookData.rollArgs then
+        edges, banes = DiceRollLogic.SplitBoons(hookData.rollArgs.boons)
+    end
+
+    print(string.format("DV: onReroll - parsed edges=%d, banes=%d", edges, banes))
+
+    -- properties is a RollProperties registered type with strict field
+    -- access -- direct .multitargets read throws "Attempt to read
+    -- unknown field multitargets in type RollProperties" on instances
+    -- where Codex never assigned the field (multitargets is set
+    -- imperatively only on multi-target rolls; single-target ability
+    -- checks never set it). try_get safely returns nil for missing
+    -- fields. Falls back to rawget (which bypasses metamethods) for
+    -- plain-table inputs that don't define try_get -- typically test
+    -- stubs.
+    local rollProps = hookData.rollArgs and hookData.rollArgs.properties
+    local multitargets = nil
+    if rollProps then
+        if type(rollProps.try_get) == "function" then
+            multitargets = rollProps:try_get("multitargets")
+        else
+            multitargets = rawget(rollProps, "multitargets")
+        end
+    end
+
+    DiceVision.pendingRoll = {
+        rollArgs = hookData.rollArgs,
+        originalRoll = hookData.originalRoll,
+        description = hookData.rollArgs and hookData.rollArgs.description,
+        edges = edges,
+        banes = banes,
+        multitargets = multitargets,
+        isReroll = true,
+        amendWithResult = hookData.amendWithResult,
+        activeRoll = hookData.activeRoll,
+        setActiveRoll = hookData.setActiveRoll,
+    }
+
+    DiceVision.waitingForRoll = true
+    DiceVision.rollStartTime = dmhub.Time() * 1000
+    DiceVision.currentRequestId = generateRequestId()
+
+    if DiceVision.connected and not DiceVision.isPolling then
+        startPolling()
+    end
+
+    showWaitingDialog()
+    chat.Send("[DiceVision] Waiting for physical dice (re-roll)...")
+
+    return "intercept"
 end
+
+-- ============================================================================
+-- RollDialog.OnBeforeTableRoll Callback (table roll interception)
+-- ============================================================================
+
+onBeforeTableRoll = function(hookData)
+    if not hookData then return nil end
+    if not DiceVision then return nil end
+
+    if DiceVision.mode ~= "replace" or not DiceVision.connected then
+        return nil
+    end
+
+    if DiceVision.waitingForRoll then
+        chat.Send("[DiceVision] Another roll is in progress; this roll will use virtual dice.")
+        return nil
+    end
+
+    print(string.format("DV: onBeforeTableRoll - roll='%s', tableName='%s', description='%s'",
+        tostring(hookData.roll), tostring(hookData.tableName), tostring(hookData.description)))
+
+    DiceVision.pendingRoll = {
+        originalRoll = hookData.roll,
+        description = hookData.description or hookData.tableName,
+        tokenid = hookData.tokenid,
+        tableRef = hookData.tableRef,
+        tableName = hookData.tableName,
+        guid = hookData.guid,
+        completeWithResult = hookData.completeWithResult,
+        isTableRoll = true,
+    }
+
+    DiceVision.waitingForRoll = true
+    DiceVision.rollStartTime = dmhub.Time() * 1000
+    DiceVision.currentRequestId = generateRequestId()
+
+    if DiceVision.connected and not DiceVision.isPolling then
+        startPolling()
+    end
+
+    showWaitingDialog()
+    chat.Send("[DiceVision] Waiting for physical dice (table roll)...")
+
+    return "intercept"
+end
+
+-- Register callbacks at load time. Silent: the user has not opted in yet
+-- (no /dv connect), so any missing-hook warning would be noise. The cached
+-- DiceVision.hooksRegistered still reflects what got wired, so /dv status
+-- can report it accurately even before the first connect.
+registerHooks(false)
 
 print("DV: DiceVision script loaded")

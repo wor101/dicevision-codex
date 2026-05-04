@@ -75,7 +75,7 @@ _G.loadDiceVision = function()
 
     -- dmhub stubs (load-time + runtime)
     dmhub.GetModLoading = function() return {} end
-    dmhub.Roll = function(rollArgs) table.insert(_G._dmhubRollLog, rollArgs) end
+    dmhub.Roll = function(rollArgs) table.insert(_G._dmhubRollLog, rollArgs); return {id = "roll-" .. #_G._dmhubRollLog} end
     dmhub.Time = function() return 0 end
     dmhub.GetDiceStyling = function() return {} end
     dmhub.GetSettingValue = function() return "" end
@@ -104,7 +104,7 @@ _G.loadDiceVision = function()
     _G.Commands = {}
 
     -- RollDialog stub (guarded nil check at line 1049)
-    _G.RollDialog = { OnBeforeRoll = false }
+    _G.RollDialog = { OnBeforeRoll = false, OnReroll = false, OnBeforeTableRoll = false }
 
     -- Chat stubs: capture messages for assertions
     _G.chat = {
@@ -155,6 +155,14 @@ _G.resetDiceVisionState = function()
     DiceVision.rollStartTime = 0
     DiceVision.currentRequestId = nil
 
+    -- Reset hook-probe caches so each test re-snapshots from its own
+    -- RollDialog setup (the snapshot is sticky in production by design).
+    DiceVision.codexDeclaredHooks = nil
+    DiceVision.hooksRegistered = nil
+
+    -- Reset one-time-warning flags so each test starts cleanly.
+    DiceVision.warnedMissingSetActiveRoll = nil
+
     -- Reset panel state
     DiceVision.panelWaitingForRoll = false
     DiceVision.panelPollStartTime = 0
@@ -172,9 +180,11 @@ _G.resetDiceVisionState = function()
 
     -- Reset RollDialog
     RollDialog.OnBeforeRoll = false
+    RollDialog.OnReroll = false
+    RollDialog.OnBeforeTableRoll = false
 
     -- Reset dmhub runtime stubs
-    dmhub.Roll = function(rollArgs) table.insert(_G._dmhubRollLog, rollArgs) end
+    dmhub.Roll = function(rollArgs) table.insert(_G._dmhubRollLog, rollArgs); return {id = "roll-" .. #_G._dmhubRollLog} end
     dmhub.Time = function() return 0 end
 
     -- Clear capture logs

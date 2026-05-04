@@ -281,17 +281,10 @@ CreateDiceVisionPanel = function()
             if not DiceVision.connected then
                 return
             end
-
-            local newMode
-            if DiceVision.mode == "replace" then
-                newMode = "off"
-            else
-                newMode = "replace"
-            end
-
-            local oldMode = DiceVision.mode
-            DiceVision.setMode(newMode)
-            chat.Send("[DiceVision] Mode changed: " .. oldMode .. " -> " .. newMode)
+            -- The toggle contract (compute opposite mode, pass verbose on
+            -- replace, emit confirmation) lives in DiceVision._panelToggle
+            -- so it can be exercised directly by tests.
+            DiceVision._panelToggle()
             updateState()
         end,
 
