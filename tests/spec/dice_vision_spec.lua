@@ -1281,6 +1281,105 @@ describe("DiceVision", function()
             -- Should still work without setActiveRoll
             assert.are.equal(1, #_G._dmhubRollLog)
         end)
+
+        it("does not mutate the caller's rollArgs.roll", function()
+            -- Regression: Codex's re-roll dialog reads g_activeRollArgs.roll
+            -- (the original dice expression, e.g. "2d10+5") and amends with
+            -- it. Mutating rollArgs.roll to a literal total in place would
+            -- make the un-updated-Codex re-roll path silently fail because
+            -- the amend can't re-roll a literal value.
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            local origRollArgs = { roll = "2d10+5", creature = nil }
+            DiceVision.pendingRoll = {
+                rollArgs = origRollArgs,
+                originalRoll = "2d10+5",
+                description = "Mutation Test",
+                edges = 0,
+                banes = 0,
+            }
+            DiceVision.waitingForRoll = true
+
+            local rollData = {
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            }
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            -- The original rollArgs.roll must remain the dice expression.
+            assert.are.equal("2d10+5", origRollArgs.roll)
+            assert.is_nil(origRollArgs.boons)
+            assert.is_nil(origRollArgs.banes)
+            assert.is_nil(origRollArgs.instant)
+            -- dmhub.Roll still received the deterministic-total version.
+            assert.are.equal(1, #_G._dmhubRollLog)
+            local sentToDmhub = _G._dmhubRollLog[1]
+            assert.are_not_equal("2d10+5", sentToDmhub.roll)
+            assert.is_true(sentToDmhub.instant)
+        end)
+
+        it("does not mutate caller's rollArgs.properties.multitargets", function()
+            -- Same regression class for the targeted-roll path: deep-copy
+            -- multitargets so [1].boons/.banes mutations don't reach the
+            -- caller's array (which Codex may still reference).
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            local origMultitargets = {
+                { tokenid = "tok-1", boons = 2, banes = 0 },
+                { tokenid = "tok-2", boons = 0, banes = 1 },
+            }
+            local origRollArgs = {
+                roll = "2d10+5",
+                creature = nil,
+                properties = { foo = "bar" },
+            }
+            DiceVision.pendingRoll = {
+                rollArgs = origRollArgs,
+                originalRoll = "2d10+5",
+                description = "Targeted Mutation Test",
+                edges = 1,
+                banes = 0,
+                multitargets = origMultitargets,
+            }
+            DiceVision.waitingForRoll = true
+
+            local rollData = {
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            }
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            -- Original multitargets array preserved.
+            assert.are.equal(2, origMultitargets[1].boons)
+            assert.are.equal(1, origMultitargets[2].banes)
+            -- Original rollArgs.properties also unchanged.
+            assert.is_nil(origRollArgs.properties.multitargets)
+            assert.are.equal("bar", origRollArgs.properties.foo)
+        end)
     end)
 
     -- ============================================================================

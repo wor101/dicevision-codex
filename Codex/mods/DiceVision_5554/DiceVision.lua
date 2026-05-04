@@ -708,7 +708,22 @@ handlePendingRoll = function(rollData)
         return true
     end
 
-    rollArgs.instant = true
+    -- Build a copy of rollArgs to mutate. Codex holds the same rollArgs
+    -- reference in g_activeRollArgs; mutating it in place pollutes the
+    -- caller's view of the original dice expression. On un-updated Codex
+    -- where the re-roll dialog reads g_activeRollArgs.roll directly and
+    -- amends with it, our deterministic-total mutation would make the
+    -- amend re-roll a literal value (e.g. "35 1 edge"), which silently
+    -- fails. Copying preserves the original for the re-roll path.
+    local rollArgsForDmhub = {}
+    for k, v in pairs(rollArgs) do rollArgsForDmhub[k] = v end
+    if rollArgs.properties then
+        local propsCopy = {}
+        for k, v in pairs(rollArgs.properties) do propsCopy[k] = v end
+        rollArgsForDmhub.properties = propsCopy
+    end
+
+    rollArgsForDmhub.instant = true
 
     print(string.format("DV: handlePendingRoll - isNonTargeted=%s, rollArgs.roll='%s'",
         tostring(isNonTargeted), tostring(rollArgs.roll)))
@@ -719,32 +734,40 @@ handlePendingRoll = function(rollData)
         if boonsValue ~= 0 and GameSystem and GameSystem.ApplyBoons then
             local rollWithBoons = GameSystem.ApplyBoons(tostring(baseTotal), boonsValue)
             print("[DiceVision] GameSystem.ApplyBoons('" .. tostring(baseTotal) .. "', " .. boonsValue .. ") returned: '" .. tostring(rollWithBoons) .. "'")
-            rollArgs.roll = rollWithBoons
+            rollArgsForDmhub.roll = rollWithBoons
         else
             print("[DiceVision] No boons to apply or GameSystem.ApplyBoons not available, using finalTotal:", finalTotal)
-            rollArgs.roll = tostring(finalTotal)
+            rollArgsForDmhub.roll = tostring(finalTotal)
         end
     else
         local net = edges - banes
-        rollArgs.roll = tostring(baseTotal)
+        rollArgsForDmhub.roll = tostring(baseTotal)
         if net > 0 then
-            rollArgs.boons = net
-            rollArgs.banes = 0
+            rollArgsForDmhub.boons = net
+            rollArgsForDmhub.banes = 0
         elseif net < 0 then
-            rollArgs.boons = 0
-            rollArgs.banes = -net
+            rollArgsForDmhub.boons = 0
+            rollArgsForDmhub.banes = -net
         else
-            rollArgs.boons = 0
-            rollArgs.banes = 0
+            rollArgsForDmhub.boons = 0
+            rollArgsForDmhub.banes = 0
         end
-        rollArgs.properties = rollArgs.properties or {}
-        rollArgs.properties.multitargets = pendingRoll.multitargets
-        rollArgs.properties.multitargets[1].boons = 0
-        rollArgs.properties.multitargets[1].banes = 0
+        -- Deep-copy multitargets so the [1].boons/banes mutations below
+        -- don't reach into the caller's array.
+        local multitargetsCopy = {}
+        for i, target in ipairs(pendingRoll.multitargets) do
+            local targetCopy = {}
+            for k, v in pairs(target) do targetCopy[k] = v end
+            multitargetsCopy[i] = targetCopy
+        end
+        multitargetsCopy[1].boons = 0
+        multitargetsCopy[1].banes = 0
+        rollArgsForDmhub.properties = rollArgsForDmhub.properties or {}
+        rollArgsForDmhub.properties.multitargets = multitargetsCopy
     end
 
     local originalComplete = rollArgs.complete
-    rollArgs.complete = function(rollInfo)
+    rollArgsForDmhub.complete = function(rollInfo)
         local net = edges - banes
         if net >= 2 or net <= -2 then
             local calculatedTier = DiceRollLogic.CalculateTierWithEdges(finalTotal, edges, banes)
@@ -760,7 +783,7 @@ handlePendingRoll = function(rollData)
         end
     end
 
-    local roll = dmhub.Roll(rollArgs)
+    local roll = dmhub.Roll(rollArgsForDmhub)
     if pendingRoll.setActiveRoll and roll then
         pendingRoll.setActiveRoll(roll)
     end
