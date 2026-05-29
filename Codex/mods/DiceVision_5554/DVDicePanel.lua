@@ -80,10 +80,11 @@ local diceVisionPanelStyles = {
         classes = {"dvToggle", "paused"},
         bgcolor = "#7a5a1d",
     },
+    -- Connect call-to-action: blue, distinct from the green/amber Active/Paused
+    -- pair so it reads as "establish a session" rather than a toggle face.
     {
-        classes = {"dvToggle", "disabled"},
-        bgcolor = "#333333",
-        brightness = 0.3,
+        classes = {"dvToggle", "connect"},
+        bgcolor = "#2d5a7a",
     },
     {
         classes = {"dvToggle", "hover"},
@@ -169,10 +170,13 @@ CreateDiceVisionPanel = function()
         if toggleButton then
             local isConnected = DiceVision.connected
             local isPaused = isConnected and DiceVision.mode == "off"
-            toggleButton:SetClass("disabled", not isConnected)
+            -- When disconnected this button is the Connect call-to-action
+            -- (blue, opens the connect popup); when connected it is the
+            -- pause/resume toggle (green Active / amber Paused).
+            toggleButton:SetClass("connect", not isConnected)
             toggleButton:SetClass("paused", isPaused)
             if not isConnected then
-                toggleButton.selfStyle.bgcolor = "#333333"
+                toggleButton.selfStyle.bgcolor = "#2d5a7a"
             elseif isPaused then
                 toggleButton.selfStyle.bgcolor = "#7a5a1d"
             else
@@ -180,7 +184,7 @@ CreateDiceVisionPanel = function()
             end
             if toggleLabel then
                 if not isConnected then
-                    toggleLabel.text = "---"
+                    toggleLabel.text = "Connect..."
                 elseif isPaused then
                     toggleLabel.text = "Paused"
                 else
@@ -313,14 +317,9 @@ CreateDiceVisionPanel = function()
 
         click = function(panel)
             if not DiceVision.connected then
-                -- Disconnected: open (or toggle closed) the connect popup
-                -- anchored to the dice button instead of the old chat hint.
-                if panel.popup ~= nil then
-                    panel.popup = nil
-                    return
-                end
-                panel.popupPositioning = "panel"
-                panel.popup = CreateConnectPopup(panel)
+                -- Connect is driven from the toggle button below; the dice
+                -- image just rolls. When disconnected it points the user there.
+                chat.Send("[DiceVision] Not connected. Click Connect... to start.")
                 return
             end
 
@@ -431,17 +430,25 @@ CreateDiceVisionPanel = function()
         vpad = 2,
 
         hover = gui.Tooltip{
-            text = "Toggle roll interception on/off",
+            text = "Connect DiceVision, or toggle roll interception on/off",
             valign = "top",
         },
 
         click = function(panel)
             if not DiceVision.connected then
+                -- Disconnected: this button is the Connect call-to-action.
+                -- Open (or toggle closed) the connect popup anchored here.
+                if panel.popup ~= nil then
+                    panel.popup = nil
+                    return
+                end
+                panel.popupPositioning = "panel"
+                panel.popup = CreateConnectPopup(panel)
                 return
             end
-            -- The toggle contract (compute opposite mode, pass verbose on
-            -- replace, emit confirmation) lives in DiceVision._panelToggle
-            -- so it can be exercised directly by tests.
+            -- Connected: the toggle contract (compute opposite mode, pass
+            -- verbose on replace, emit confirmation) lives in
+            -- DiceVision._panelToggle so it can be exercised directly by tests.
             DiceVision._panelToggle()
             updateState()
         end,
