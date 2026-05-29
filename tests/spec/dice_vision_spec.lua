@@ -9,6 +9,17 @@ describe("DiceVision", function()
         resetDiceVisionState()
     end)
 
+    -- Shared across the contract blocks below: true if any sent chat message
+    -- contains substr (plain-text, not a Lua pattern).
+    local function chatHas(substr)
+        for _, entry in ipairs(_G._chatLog) do
+            if entry.type == "send" and string.find(entry.message, substr, 1, true) then
+                return true
+            end
+        end
+        return false
+    end
+
     -- ============================================================================
     -- Category 1: Pure Utility Functions
     -- ============================================================================
@@ -2946,15 +2957,6 @@ describe("DiceVision", function()
             end
         end
 
-        local function chatHas(substr)
-            for _, entry in ipairs(_G._chatLog) do
-                if entry.type == "send" and string.find(entry.message, substr) then
-                    return true
-                end
-            end
-            return false
-        end
-
         it("on success sets connected, replace mode, uppercased code, and fires onResult(true)", function()
             stubSession("active")
             local cbSuccess, cbResult
@@ -3152,6 +3154,165 @@ describe("DiceVision", function()
                 end
             end
             assert.is_true(logged)
+        end)
+    end)
+
+    describe("DiceVision rules seams", function()
+        -- The settings popup and the /dv rules commands share these seams.
+        -- Coercion/validation lives in the seam (the popup passes raw text), so
+        -- it is pinned here. Mirrors the connect/_panelToggle contract blocks.
+        it("setValueMapping creates the nested table, sets the value, returns true", function()
+            DiceVision.rules.valueMappings = {}
+            local ok = DiceVision.setValueMapping("d20", "0", "20")
+            assert.is_true(ok)
+            assert.are.equal(20, DiceVision.rules.valueMappings["d20"][0])
+            assert.is_true(chatHas("Mapped d20: 0 -> 20"))
+        end)
+
+        it("setValueMapping rejects non-numeric values: usage, no write, returns false", function()
+            DiceVision.rules.valueMappings = {}
+            local ok = DiceVision.setValueMapping("d20", "x", "20")
+            assert.is_false(ok)
+            assert.is_nil(DiceVision.rules.valueMappings["d20"])
+            assert.is_true(chatHas("Usage: /dv rules map"))
+        end)
+
+        it("removeValueMapping removes the entry and prunes the emptied die table", function()
+            DiceVision.rules.valueMappings = {["d10"] = {[0] = 10}}
+            local ok = DiceVision.removeValueMapping("d10", "0")
+            assert.is_true(ok)
+            assert.is_nil(DiceVision.rules.valueMappings["d10"])
+            assert.is_true(chatHas("Removed mapping d10: 0"))
+        end)
+
+        it("removeValueMapping keeps other faces of the same die", function()
+            DiceVision.rules.valueMappings = {["d10"] = {[0] = 10, [1] = 11}}
+            DiceVision.removeValueMapping("d10", 0)
+            assert.is_nil(DiceVision.rules.valueMappings["d10"][0])
+            assert.are.equal(11, DiceVision.rules.valueMappings["d10"][1])
+        end)
+
+        it("removeValueMapping is a no-op returning false on a missing mapping", function()
+            DiceVision.rules.valueMappings = {}
+            assert.is_false(DiceVision.removeValueMapping("d10", 5))
+        end)
+
+        it("setDiceSelection auto clears to nil", function()
+            DiceVision.rules.diceSelection = {keep = "highest", count = 2}
+            local result = DiceVision.setDiceSelection("auto")
+            assert.is_nil(result)
+            assert.is_nil(DiceVision.rules.diceSelection)
+        end)
+
+        it("setDiceSelection highest+count sets the table", function()
+            local result = DiceVision.setDiceSelection("highest", "3")
+            assert.are.same({keep = "highest", count = 3}, result)
+            assert.are.same({keep = "highest", count = 3}, DiceVision.rules.diceSelection)
+        end)
+
+        it("setDiceSelection with a mode but no count leaves selection unchanged (usage)", function()
+            DiceVision.rules.diceSelection = nil
+            local result = DiceVision.setDiceSelection("highest")
+            assert.is_nil(result)
+            assert.is_nil(DiceVision.rules.diceSelection)
+            assert.is_true(chatHas("Usage: /dv rules keep"))
+        end)
+
+        it("setClampOutOfRange toggles the boolean and confirms", function()
+            assert.is_true(DiceVision.setClampOutOfRange(true))
+            assert.is_true(DiceVision.rules.clampOutOfRange)
+            assert.is_true(chatHas("clamping enabled"))
+            assert.is_false(DiceVision.setClampOutOfRange(false))
+            assert.is_false(DiceVision.rules.clampOutOfRange)
+        end)
+
+        it("clearRules(false) resets to defaults (d10 0 -> 10)", function()
+            DiceVision.rules.valueMappings = {["d20"] = {[0] = 20}}
+            DiceVision.rules.clampOutOfRange = true
+            DiceVision.clearRules(false)
+            assert.are.equal(10, DiceVision.rules.valueMappings["d10"][0])
+            assert.is_nil(DiceVision.rules.valueMappings["d20"])
+            assert.is_false(DiceVision.rules.clampOutOfRange)
+        end)
+
+        it("clearRules(true) clears everything including defaults", function()
+            DiceVision.clearRules(true)
+            assert.is_nil(next(DiceVision.rules.valueMappings))
+            assert.is_nil(DiceVision.rules.diceSelection)
+            assert.is_false(DiceVision.rules.clampOutOfRange)
+        end)
+    end)
+
+    describe("DiceVision connection seams", function()
+        local originalNetGet
+
+        before_each(function()
+            originalNetGet = _G.net.Get
+        end)
+
+        after_each(function()
+            _G.net.Get = originalNetGet
+        end)
+
+        it("disconnect clears connection state, sets mode off, stops polling", function()
+            DiceVision.connected = true
+            DiceVision.sessionCode = "ABC"
+            DiceVision.mode = "replace"
+            DiceVision.isPolling = true
+            DiceVision.disconnect()
+            assert.is_false(DiceVision.connected)
+            assert.is_nil(DiceVision.sessionCode)
+            assert.are.equal("off", DiceVision.mode)
+            assert.is_false(DiceVision.isPolling)
+            assert.is_true(chatHas("Disconnected"))
+        end)
+
+        it("refreshHooks re-probes and confirms", function()
+            DiceVision.codexDeclaredHooks = {ability = true}
+            DiceVision.refreshHooks()
+            assert.is_table(DiceVision.hooksRegistered)
+            assert.is_true(chatHas("Hook probe refreshed"))
+        end)
+
+        it("testConnection fires onResult(true) and confirms on success", function()
+            _G.net.Get = function(args) args.success({ok = true}) end
+            local cbOk = nil
+            DiceVision.testConnection(function(success) cbOk = success end)
+            assert.is_true(cbOk)
+            assert.is_true(chatHas("API is reachable!"))
+        end)
+
+        it("testConnection fires onResult(false) and reports on error", function()
+            _G.net.Get = function(args) args.error("boom") end
+            local cbOk = nil
+            DiceVision.testConnection(function(success) cbOk = success end)
+            assert.is_false(cbOk)
+            assert.is_true(chatHas("API error:"))
+        end)
+
+        it("getStatus reports connected fields and no missing hooks when all registered", function()
+            DiceVision.connected = true
+            DiceVision.sessionCode = "ABC"
+            DiceVision.mode = "replace"
+            DiceVision.hooksRegistered = {ability = true, reroll = true, ["table"] = true}
+            local s = DiceVision.getStatus()
+            assert.is_true(s.connected)
+            assert.are.equal("ABC", s.sessionCode)
+            assert.are.equal("replace", s.mode)
+            assert.are.equal(0, #s.missing)
+        end)
+
+        it("getStatus lists missing hooks by RollDialog name when none are registered", function()
+            DiceVision.hooksRegistered = {ability = false, reroll = false, ["table"] = false}
+            local s = DiceVision.getStatus()
+            assert.are.equal(3, #s.missing)
+            -- Pin the formatting contract (feeds both /dv status and the popup),
+            -- not just the count, so a mislabeled hook name is caught.
+            local joined = table.concat(s.missing, ",")
+            assert.is_truthy(string.find(joined, "RollDialog.", 1, true))
+            for _, name in ipairs({"RollDialog.OnBeforeRoll", "RollDialog.OnReroll", "RollDialog.OnBeforeTableRoll"}) do
+                assert.is_truthy(string.find(joined, name, 1, true))
+            end
         end)
     end)
 end)

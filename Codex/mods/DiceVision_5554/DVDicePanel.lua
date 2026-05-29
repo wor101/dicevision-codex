@@ -134,9 +134,97 @@ local connectPopupStyles = {
     },
 }
 
+-- Settings popup styles (own styling island, like connectPopupStyles).
+local settingsPopupStyles = {
+    {
+        classes = "dvSetHeader",
+        color = "#ffd9a0",
+        fontSize = 11,
+        bold = true,
+        width = "auto",
+        height = "auto",
+        tmargin = 6,
+        bmargin = 2,
+    },
+    {
+        classes = "dvSetInfo",
+        color = "#cccccc",
+        fontSize = 10,
+        width = "auto",
+        height = "auto",
+    },
+    {
+        classes = "dvSetBtn",
+        bgimage = "panels/square.png",
+        bgcolor = "#3a3a3a",
+        color = "white",
+        height = 22,
+        width = "auto",
+        halign = "center",
+        valign = "center",
+        cornerRadius = 4,
+        hpad = 8,
+        vpad = 2,
+        fontSize = 11,
+    },
+    {
+        classes = {"dvSetBtn", "hover"},
+        brightness = 1.2,
+    },
+    {
+        classes = {"dvSetBtn", "disabled"},
+        bgcolor = "#2a2a2a",
+        brightness = 0.4,
+    },
+    {
+        classes = {"dvSetBtn", "selected"},
+        bgcolor = "#2d5a7a",
+    },
+    {
+        classes = "dvSetInput",
+        bgimage = "panels/square.png",
+        bgcolor = "#0d0d0dff",
+        color = "white",
+        height = 22,
+        fontSize = 11,
+        pad = 3,
+        cornerRadius = 3,
+        borderWidth = 1,
+        borderColor = "#555555",
+    },
+    {
+        classes = "dvSetRemove",
+        bgimage = "panels/square.png",
+        bgcolor = "#7a2d2d",
+        color = "white",
+        width = 18,
+        height = 18,
+        halign = "center",
+        valign = "center",
+        cornerRadius = 3,
+        fontSize = 11,
+    },
+    {
+        classes = {"dvSetRemove", "hover"},
+        brightness = 1.3,
+    },
+}
+
 -- ============================================================================
 -- Panel Creation
 -- ============================================================================
+
+-- Open the popup built by `factory(hostPanel)` anchored to hostPanel, or close
+-- it if already open (click-to-toggle). Shared by the connect toggle and the
+-- settings gear so both behave identically.
+local function togglePopup(hostPanel, factory)
+    if hostPanel.popup ~= nil then
+        hostPanel.popup = nil
+        return
+    end
+    hostPanel.popupPositioning = "panel"
+    hostPanel.popup = factory(hostPanel)
+end
 
 CreateDiceVisionPanel = function()
     local diceStyle = dmhub.GetDiceStyling(
@@ -314,6 +402,291 @@ CreateDiceVisionPanel = function()
         return popupPanel
     end
 
+    -- Builds the settings popup spawned from the gear button. hostPanel is the
+    -- gear; the popup closes by clearing hostPanel.popup. Config mutations and
+    -- diagnostic actions go through the DiceVision.* seams so the popup carries
+    -- no logic of its own (matching the connect popup). The status section
+    -- refreshes on a think tick because it can change from outside the popup
+    -- (chat /dv commands, a poll-timeout disconnect, late hook registration);
+    -- the rules controls refresh on demand after each edit so they do not
+    -- clobber text the user is typing into the add-mapping inputs.
+    local CreateSettingsPopup = function(hostPanel)
+        local popupPanel
+        local statusInfo, testLine
+        local addStatus
+        local testing = false
+        local clampBtn, clampLabel
+        local autoBtn, highBtn, lowBtn, countInput
+        local mappingRows
+        local addDie, addFrom, addTo
+        local rebuildMappingRows
+
+        local function buildButton(label, onClick)
+            return gui.Panel{
+                classes = "dvSetBtn",
+                click = function(panel) onClick(panel) end,
+                gui.Label{
+                    interactable = false,
+                    width = "auto",
+                    height = "auto",
+                    halign = "center",
+                    valign = "center",
+                    color = "white",
+                    fontSize = 11,
+                    text = label,
+                },
+            }
+        end
+
+        local function refreshStatus()
+            local s = DiceVision.getStatus()
+            local text = string.format(
+                "Connected: %s   Mode: %s\nSession: %s",
+                s.connected and "yes" or "no",
+                s.mode,
+                s.sessionCode or "none"
+            )
+            if #s.missing > 0 then
+                text = text .. "\nMissing hooks: " .. tostring(#s.missing)
+            end
+            statusInfo.text = text
+        end
+
+        local function refreshClamp()
+            local on = DiceVision.rules.clampOutOfRange
+            clampLabel.text = on and "On" or "Off"
+            clampBtn:SetClass("selected", on)
+        end
+
+        local function refreshKeep()
+            local sel = DiceVision.rules.diceSelection
+            local mode = sel and sel.keep or "auto"
+            autoBtn:SetClass("selected", mode == "auto")
+            highBtn:SetClass("selected", mode == "highest")
+            lowBtn:SetClass("selected", mode == "lowest")
+            -- Count only applies to highest/lowest; disable it in auto mode so a
+            -- typed count is not silently ignored.
+            countInput.editable = (mode ~= "auto")
+        end
+
+        -- Repaint every rules control at once (rebuildMappingRows is a forward-
+        -- declared upvalue, assigned below before this is ever called).
+        local function refreshAllRules()
+            refreshClamp()
+            refreshKeep()
+            rebuildMappingRows()
+        end
+
+        rebuildMappingRows = function()
+            local rows = {}
+            for dieType, mappings in pairs(DiceVision.rules.valueMappings) do
+                for from, to in pairs(mappings) do
+                    -- Close over the specific entry so the remove button stays
+                    -- correct after the list is rebuilt.
+                    local d, f = dieType, from
+                    rows[#rows + 1] = gui.Panel{
+                        flow = "horizontal",
+                        width = "100%",
+                        height = "auto",
+                        valign = "center",
+                        gui.Label{
+                            classes = "dvSetInfo",
+                            width = "100%-24",
+                            height = "auto",
+                            text = string.format("%s: %d -> %d", dieType, from, to),
+                        },
+                        gui.Panel{
+                            classes = "dvSetRemove",
+                            click = function()
+                                DiceVision.removeValueMapping(d, f)
+                                rebuildMappingRows()
+                            end,
+                            gui.Label{
+                                interactable = false,
+                                width = "100%",
+                                height = "100%",
+                                halign = "center",
+                                valign = "center",
+                                color = "white",
+                                fontSize = 11,
+                                text = "x",
+                            },
+                        },
+                    }
+                end
+            end
+            if #rows == 0 then
+                rows[1] = gui.Label{
+                    classes = "dvSetInfo",
+                    width = "100%",
+                    height = "auto",
+                    text = "(no mappings)",
+                }
+            end
+            mappingRows.children = rows
+        end
+
+        statusInfo = gui.Label{ classes = "dvSetInfo", width = "100%", height = "auto", text = "" }
+        testLine = gui.Label{ classes = "dvSetInfo", width = "100%", height = "auto", text = "" }
+
+        clampLabel = gui.Label{
+            interactable = false, width = 28, height = "auto",
+            halign = "center", valign = "center", color = "white", fontSize = 11, text = "Off",
+        }
+        clampBtn = gui.Panel{
+            classes = "dvSetBtn",
+            click = function()
+                DiceVision.setClampOutOfRange(not DiceVision.rules.clampOutOfRange)
+                refreshClamp()
+            end,
+            clampLabel,
+        }
+
+        countInput = gui.Input{
+            classes = "dvSetInput",
+            width = 36,
+            numeric = true,
+            lineType = "SingleLine",
+            text = "",
+            change = function(element)
+                local sel = DiceVision.rules.diceSelection
+                if sel then
+                    DiceVision.setDiceSelection(sel.keep, tonumber(element.text) or sel.count)
+                    refreshKeep()
+                end
+            end,
+        }
+        local function selectKeep(mode)
+            if mode == "auto" then
+                DiceVision.setDiceSelection("auto")
+            else
+                DiceVision.setDiceSelection(mode, tonumber(countInput.text) or 1)
+            end
+            refreshKeep()
+        end
+        autoBtn = buildButton("Auto", function() selectKeep("auto") end)
+        highBtn = buildButton("Highest", function() selectKeep("highest") end)
+        lowBtn = buildButton("Lowest", function() selectKeep("lowest") end)
+
+        addDie = gui.Input{ classes = "dvSetInput", width = 48, lineType = "SingleLine", placeholderText = "die", text = "" }
+        addFrom = gui.Input{ classes = "dvSetInput", width = 36, numeric = true, lineType = "SingleLine", placeholderText = "from", text = "" }
+        addTo = gui.Input{ classes = "dvSetInput", width = 36, numeric = true, lineType = "SingleLine", placeholderText = "to", text = "" }
+        addStatus = gui.Label{ classes = "dvSetInfo", width = "100%", height = "auto", text = "" }
+        local addBtn = buildButton("Add", function()
+            -- The seam also chats a usage line on failure, but the chat window is
+            -- a different surface; give popup-local feedback like the connect popup.
+            if DiceVision.setValueMapping(addDie.text, addFrom.text, addTo.text) then
+                addDie.text = ""
+                addFrom.text = ""
+                addTo.text = ""
+                addStatus.text = ""
+                rebuildMappingRows()
+            else
+                addStatus.text = "Enter a die and numeric from/to"
+            end
+        end)
+
+        mappingRows = gui.Panel{ flow = "vertical", width = "100%", height = "auto" }
+
+        popupPanel = gui.Panel{
+            styles = settingsPopupStyles,
+            flow = "vertical",
+            width = 250,
+            height = "auto",
+            pad = 8,
+            bgimage = "panels/square.png",
+            bgcolor = "#1a1a1aff",
+            cornerRadius = 6,
+            borderWidth = 1,
+            borderColor = "#666666",
+            captureEscape = true,
+            escapePriority = 10,
+            escape = function(element)
+                if hostPanel then hostPanel.popup = nil end
+            end,
+            thinkTime = 0.25,
+            think = function(element)
+                refreshStatus()
+            end,
+
+            gui.Label{
+                interactable = false, width = "auto", height = "auto",
+                halign = "center", fontSize = 13, bold = true, color = "white",
+                text = "DiceVision Settings", bmargin = 4,
+            },
+
+            -- Connection / diagnostics
+            gui.Label{ classes = "dvSetHeader", text = "Connection" },
+            statusInfo,
+            gui.Panel{
+                flow = "horizontal", width = "100%", height = "auto", tmargin = 4,
+                buildButton("Disconnect", function() DiceVision.disconnect(); refreshStatus() end),
+                buildButton("Refresh", function() DiceVision.refreshHooks(); refreshStatus() end),
+                buildButton("Test", function(panel)
+                    -- In-flight guard (like the connect popup): block concurrent
+                    -- net.Get calls so repeated clicks do not spam chat or race
+                    -- to write testLine out of order.
+                    if testing then
+                        return
+                    end
+                    testing = true
+                    panel:SetClass("disabled", true)
+                    testLine.text = "Testing..."
+                    DiceVision.testConnection(function(success)
+                        testing = false
+                        if hostPanel and hostPanel.popup == popupPanel then
+                            panel:SetClass("disabled", false)
+                            testLine.text = success and "API reachable" or "API error"
+                        end
+                    end)
+                end),
+            },
+            testLine,
+
+            -- Dice rules
+            gui.Label{ classes = "dvSetHeader", text = "Dice Rules" },
+            gui.Panel{
+                flow = "horizontal", width = "100%", height = "auto", valign = "center",
+                gui.Label{ classes = "dvSetInfo", width = "100%-60", height = "auto", text = "Clamp out-of-range to 1" },
+                clampBtn,
+            },
+            gui.Panel{
+                flow = "horizontal", width = "100%", height = "auto", valign = "center", tmargin = 4,
+                gui.Label{ classes = "dvSetInfo", width = 32, height = "auto", text = "Keep" },
+                autoBtn, highBtn, lowBtn, countInput,
+            },
+
+            -- Value mappings
+            gui.Label{ classes = "dvSetHeader", text = "Value Mappings" },
+            mappingRows,
+            gui.Panel{
+                flow = "horizontal", width = "100%", height = "auto", valign = "center", tmargin = 4,
+                addDie, addFrom, addTo, addBtn,
+            },
+            addStatus,
+            gui.Panel{
+                flow = "horizontal", width = "100%", height = "auto", tmargin = 4,
+                buildButton("Reset defaults", function()
+                    DiceVision.clearRules(false); refreshAllRules()
+                end),
+                buildButton("Clear all", function()
+                    DiceVision.clearRules(true); refreshAllRules()
+                end),
+            },
+        }
+
+        -- Initial paint from current state.
+        refreshStatus()
+        refreshClamp()
+        refreshKeep()
+        if DiceVision.rules.diceSelection then
+            countInput.text = tostring(DiceVision.rules.diceSelection.count)
+        end
+        rebuildMappingRows()
+
+        return popupPanel
+    end
+
     diceButton = gui.Panel{
         classes = "dvButton",
         bgimage = "ui-icons/dsdice/djordice-2d10-filled.png",
@@ -446,13 +819,7 @@ CreateDiceVisionPanel = function()
         click = function(panel)
             if not DiceVision.connected then
                 -- Disconnected: this button is the Connect call-to-action.
-                -- Open (or toggle closed) the connect popup anchored here.
-                if panel.popup ~= nil then
-                    panel.popup = nil
-                    return
-                end
-                panel.popupPositioning = "panel"
-                panel.popup = CreateConnectPopup(panel)
+                togglePopup(panel, CreateConnectPopup)
                 return
             end
             -- Connected: the toggle contract (compute opposite mode, pass
@@ -518,6 +885,30 @@ CreateDiceVisionPanel = function()
                 valign = "center",
                 toggleButton,
             },
+        },
+
+        -- Floating gear (top-right) opening the settings popup. floating so it
+        -- does not consume any of the fixed 100px row height.
+        gui.Panel{
+            floating = true,
+            halign = "right",
+            valign = "top",
+            width = 18,
+            height = 18,
+            tmargin = 2,
+            rmargin = 8,
+            bgimage = "panels/hud/gear.png",
+            bgcolor = "white",
+            hover = gui.Tooltip{
+                text = "DiceVision settings",
+                valign = "bottom",
+            },
+            styles = {
+                { classes = "hover", scale = 1.15, brightness = 1.2 },
+            },
+            click = function(panel)
+                togglePopup(panel, CreateSettingsPopup)
+            end,
         },
     }
 
