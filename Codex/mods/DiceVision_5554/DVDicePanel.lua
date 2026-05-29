@@ -80,14 +80,57 @@ local diceVisionPanelStyles = {
         classes = {"dvToggle", "paused"},
         bgcolor = "#7a5a1d",
     },
+    -- Connect call-to-action: blue, distinct from the green/amber Active/Paused
+    -- pair so it reads as "establish a session" rather than a toggle face.
     {
-        classes = {"dvToggle", "disabled"},
-        bgcolor = "#333333",
-        brightness = 0.3,
+        classes = {"dvToggle", "connect"},
+        bgcolor = "#2d5a7a",
     },
     {
         classes = {"dvToggle", "hover"},
         brightness = 1.2,
+    },
+}
+
+-- Connect popup styles. Popups are a styling island (popupsInheritStyles
+-- defaults false), so the connect popup carries its own style table rather
+-- than relying on diceVisionPanelStyles above.
+local connectPopupStyles = {
+    {
+        classes = "dvConnectInput",
+        bgimage = "panels/square.png",
+        bgcolor = "#0d0d0dff",
+        color = "white",
+        width = 140,
+        height = 24,
+        fontSize = 12,
+        pad = 4,
+        cornerRadius = 3,
+        borderWidth = 1,
+        borderColor = "#555555",
+    },
+    {
+        classes = "dvConnectBtn",
+        bgimage = "panels/square.png",
+        -- Blue to match the "Connect..." toggle CTA (consistent "connect =
+        -- blue"); green is reserved for the connected/Active state.
+        bgcolor = "#2d5a7a",
+        color = "white",
+        width = 140,
+        height = 24,
+        halign = "center",
+        valign = "center",
+        cornerRadius = 4,
+        fontSize = 12,
+    },
+    {
+        classes = {"dvConnectBtn", "hover"},
+        brightness = 1.2,
+    },
+    {
+        classes = {"dvConnectBtn", "disabled"},
+        bgcolor = "#333333",
+        brightness = 0.3,
     },
 }
 
@@ -129,10 +172,13 @@ CreateDiceVisionPanel = function()
         if toggleButton then
             local isConnected = DiceVision.connected
             local isPaused = isConnected and DiceVision.mode == "off"
-            toggleButton:SetClass("disabled", not isConnected)
+            -- When disconnected this button is the Connect call-to-action
+            -- (blue, opens the connect popup); when connected it is the
+            -- pause/resume toggle (green Active / amber Paused).
+            toggleButton:SetClass("connect", not isConnected)
             toggleButton:SetClass("paused", isPaused)
             if not isConnected then
-                toggleButton.selfStyle.bgcolor = "#333333"
+                toggleButton.selfStyle.bgcolor = "#2d5a7a"
             elseif isPaused then
                 toggleButton.selfStyle.bgcolor = "#7a5a1d"
             else
@@ -140,7 +186,7 @@ CreateDiceVisionPanel = function()
             end
             if toggleLabel then
                 if not isConnected then
-                    toggleLabel.text = "---"
+                    toggleLabel.text = "Connect..."
                 elseif isPaused then
                     toggleLabel.text = "Paused"
                 else
@@ -148,6 +194,124 @@ CreateDiceVisionPanel = function()
                 end
             end
         end
+    end
+
+    -- Builds the connect popup spawned from the (disconnected) toggle button.
+    -- hostPanel is the toggle button so the async connect callback can close
+    -- the popup by clearing hostPanel.popup. The connect contract itself lives
+    -- in DiceVision.connect; this just gathers the code and reflects status.
+    local CreateConnectPopup = function(hostPanel)
+        local input
+        local statusLine
+        local connectButton
+        local popupPanel
+        local connecting = false
+
+        local doConnect = function()
+            if connecting then
+                return
+            end
+            local code = (input and input.text or ""):gsub("%s+", "")
+            if code == "" then
+                statusLine.text = "Enter a session code"
+                return
+            end
+            connecting = true
+            connectButton:SetClass("disabled", true)
+            statusLine.text = "Connecting..."
+            DiceVision.connect(code, function(success, result)
+                connecting = false
+                if success then
+                    if hostPanel then
+                        hostPanel.popup = nil
+                    end
+                -- net.Get is async in production, so the user may have closed
+                -- the popup (escape, or re-clicking the toggle) before this
+                -- fires. Only touch the popup widgets if this popup is still
+                -- the host's active one; otherwise they are detached.
+                elseif hostPanel and hostPanel.popup == popupPanel then
+                    connectButton:SetClass("disabled", false)
+                    statusLine.text = "Failed: " .. tostring(result)
+                end
+            end)
+        end
+
+        input = gui.Input{
+            classes = "dvConnectInput",
+            placeholderText = "session code",
+            lineType = "SingleLine",
+            selectAllOnFocus = true,
+            characterLimit = 16,
+            text = "",
+            submit = function(element) doConnect() end,
+        }
+
+        statusLine = gui.Label{
+            interactable = false,
+            width = 140,
+            height = "auto",
+            halign = "center",
+            fontSize = 9,
+            color = "#cccccc",
+            text = "",
+        }
+
+        connectButton = gui.Panel{
+            classes = "dvConnectBtn",
+            hover = gui.Tooltip{
+                text = "Connect to this DiceVision session",
+            },
+            click = function(panel) doConnect() end,
+
+            gui.Label{
+                interactable = false,
+                width = "auto",
+                height = "auto",
+                halign = "center",
+                valign = "center",
+                color = "white",
+                fontSize = 12,
+                text = "Connect",
+            },
+        }
+
+        popupPanel = gui.Panel{
+            styles = connectPopupStyles,
+            flow = "vertical",
+            width = "auto",
+            height = "auto",
+            pad = 8,
+            bgimage = "panels/square.png",
+            bgcolor = "#1a1a1aff",
+            cornerRadius = 6,
+            borderWidth = 1,
+            borderColor = "#666666",
+            captureEscape = true,
+            escapePriority = 10,
+            escape = function(element)
+                if hostPanel then
+                    hostPanel.popup = nil
+                end
+            end,
+
+            gui.Label{
+                interactable = false,
+                width = "auto",
+                height = "auto",
+                halign = "center",
+                fontSize = 11,
+                bold = true,
+                color = "white",
+                text = "DiceVision",
+                bmargin = 4,
+            },
+            input,
+            gui.Panel{ width = 140, height = 4 },
+            connectButton,
+            statusLine,
+        }
+
+        return popupPanel
     end
 
     diceButton = gui.Panel{
@@ -162,7 +326,9 @@ CreateDiceVisionPanel = function()
 
         click = function(panel)
             if not DiceVision.connected then
-                chat.Send("[DiceVision] Not connected. Use /dv connect <code> first.")
+                -- Connect is driven from the toggle button below; the dice
+                -- image just rolls. When disconnected it points the user there.
+                chat.Send("[DiceVision] Not connected. Click Connect... to start.")
                 return
             end
 
@@ -273,17 +439,25 @@ CreateDiceVisionPanel = function()
         vpad = 2,
 
         hover = gui.Tooltip{
-            text = "Toggle roll interception on/off",
+            text = "Connect DiceVision, or toggle roll interception on/off",
             valign = "top",
         },
 
         click = function(panel)
             if not DiceVision.connected then
+                -- Disconnected: this button is the Connect call-to-action.
+                -- Open (or toggle closed) the connect popup anchored here.
+                if panel.popup ~= nil then
+                    panel.popup = nil
+                    return
+                end
+                panel.popupPositioning = "panel"
+                panel.popup = CreateConnectPopup(panel)
                 return
             end
-            -- The toggle contract (compute opposite mode, pass verbose on
-            -- replace, emit confirmation) lives in DiceVision._panelToggle
-            -- so it can be exercised directly by tests.
+            -- Connected: the toggle contract (compute opposite mode, pass
+            -- verbose on replace, emit confirmation) lives in
+            -- DiceVision._panelToggle so it can be exercised directly by tests.
             DiceVision._panelToggle()
             updateState()
         end,

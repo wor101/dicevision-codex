@@ -2917,6 +2917,117 @@ describe("DiceVision", function()
         end)
     end)
 
+    describe("DiceVision.connect contract", function()
+        -- Both /dv connect and the DVDicePanel connect popup route through
+        -- DiceVision.connect. These tests pin the shared contract (normalize
+        -- code, set sessionCode, flip to replace + connected on success, clear
+        -- sessionCode on failure, fire onResult) and that the command handler
+        -- still delegates. net.Get is stubbed per-test to drive validateSession.
+        local originalNetGet
+
+        before_each(function()
+            originalNetGet = _G.net.Get
+        end)
+
+        after_each(function()
+            _G.net.Get = originalNetGet
+        end)
+
+        local function stubSession(outcome)
+            -- outcome: "active" | "inactive" | "error"
+            _G.net.Get = function(args)
+                if outcome == "active" then
+                    args.success({active = true})
+                elseif outcome == "inactive" then
+                    args.success({active = false})
+                else
+                    args.error("boom")
+                end
+            end
+        end
+
+        local function chatHas(substr)
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "send" and string.find(entry.message, substr) then
+                    return true
+                end
+            end
+            return false
+        end
+
+        it("on success sets connected, replace mode, uppercased code, and fires onResult(true)", function()
+            stubSession("active")
+            local cbSuccess, cbResult
+            DiceVision.connect("ab1", function(success, result)
+                cbSuccess, cbResult = success, result
+            end)
+            assert.is_true(DiceVision.connected)
+            assert.are.equal("replace", DiceVision.mode)
+            assert.are.equal("AB1", DiceVision.sessionCode)
+            assert.is_true(chatHas("Connected!"))
+            assert.is_true(cbSuccess)
+            assert.are.equal(true, cbResult.active)
+        end)
+
+        it("on inactive session clears sessionCode, stays disconnected, fires onResult(false)", function()
+            stubSession("inactive")
+            local cbSuccess = nil
+            DiceVision.connect("ab1", function(success) cbSuccess = success end)
+            assert.is_false(DiceVision.connected)
+            assert.is_nil(DiceVision.sessionCode)
+            assert.is_true(chatHas("Connection failed"))
+            assert.is_false(cbSuccess)
+        end)
+
+        it("on network error clears sessionCode and fires onResult(false)", function()
+            stubSession("error")
+            local cbSuccess = nil
+            DiceVision.connect("ab1", function(success) cbSuccess = success end)
+            assert.is_false(DiceVision.connected)
+            assert.is_nil(DiceVision.sessionCode)
+            assert.is_true(chatHas("Connection failed"))
+            assert.is_false(cbSuccess)
+        end)
+
+        it("empty / whitespace code shows usage, fires onResult(false), never hits net", function()
+            local netCalled = false
+            _G.net.Get = function() netCalled = true end
+            local cbSuccess = nil
+            DiceVision.connect("   ", function(success) cbSuccess = success end)
+            assert.is_false(netCalled)
+            assert.is_false(cbSuccess)
+            assert.is_true(chatHas("Usage: /dv connect"))
+            assert.is_nil(DiceVision.sessionCode)
+        end)
+
+        it("nil code is treated as empty (usage), never hits net", function()
+            local netCalled = false
+            _G.net.Get = function() netCalled = true end
+            DiceVision.connect(nil)
+            assert.is_false(netCalled)
+            assert.is_true(chatHas("Usage: /dv connect"))
+        end)
+
+        it("normalizes surrounding whitespace and uppercases the code", function()
+            stubSession("active")
+            DiceVision.connect("  ab1  ")
+            assert.are.equal("AB1", DiceVision.sessionCode)
+        end)
+
+        it("strips interior whitespace, not just surrounding", function()
+            stubSession("active")
+            DiceVision.connect("a b 1")
+            assert.are.equal("AB1", DiceVision.sessionCode)
+        end)
+
+        it("/dv connect command delegates to DiceVision.connect", function()
+            stubSession("active")
+            Commands.dv("connect ab1")
+            assert.are.equal("AB1", DiceVision.sessionCode)
+            assert.is_true(DiceVision.connected)
+        end)
+    end)
+
     describe("registerHooks silent path printf contract", function()
         -- Even when verbose=false (load-time, internal setMode), the printf
         -- trail must still emit per missing hook so a post-mortem trail
