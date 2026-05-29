@@ -112,7 +112,9 @@ local connectPopupStyles = {
     {
         classes = "dvConnectBtn",
         bgimage = "panels/square.png",
-        bgcolor = "#2d7a2d",
+        -- Blue to match the "Connect..." toggle CTA (consistent "connect =
+        -- blue"); green is reserved for the connected/Active state.
+        bgcolor = "#2d5a7a",
         color = "white",
         width = 140,
         height = 24,
@@ -258,8 +260,8 @@ CreateDiceVisionPanel = function()
 
             gui.Label{
                 interactable = false,
-                width = "100%",
-                height = "100%",
+                width = "auto",
+                height = "auto",
                 halign = "center",
                 valign = "center",
                 color = "white",
