@@ -999,6 +999,141 @@ DiceVision.connect = function(code, onResult)
 end
 
 -- ============================================================================
+-- Settings & diagnostic seams
+-- ============================================================================
+-- Shared by the /dv commands and the DVDicePanel settings popup. Each seam
+-- performs one config mutation or diagnostic action and emits the same chat
+-- confirmation its /dv subcommand emitted, so behavior is preserved and the
+-- popup gets identical feedback. Follows the same extract-for-testability
+-- pattern as DiceVision.connect / DiceVision._panelToggle: validation and
+-- numeric coercion live here (not in the popup) so they are unit-testable and
+-- the popup can pass raw input text.
+
+DiceVision.setValueMapping = function(dieType, fromVal, toVal)
+    fromVal = tonumber(fromVal)
+    toVal = tonumber(toVal)
+    if not (dieType and fromVal and toVal) then
+        chat.Send("[DiceVision] Usage: /dv rules map <dieType> <fromValue> <toValue>")
+        return false
+    end
+    DiceVision.rules.valueMappings[dieType] = DiceVision.rules.valueMappings[dieType] or {}
+    DiceVision.rules.valueMappings[dieType][fromVal] = toVal
+    chat.Send(string.format("[DiceVision] Mapped %s: %d -> %d", dieType, fromVal, toVal))
+    return true
+end
+
+DiceVision.removeValueMapping = function(dieType, fromVal)
+    fromVal = tonumber(fromVal)
+    local dieMap = dieType and DiceVision.rules.valueMappings[dieType]
+    if not (dieMap and fromVal and dieMap[fromVal] ~= nil) then
+        return false
+    end
+    dieMap[fromVal] = nil
+    -- Prune the die's table once its last mapping is gone so rules show and the
+    -- editor list do not display an empty die entry.
+    if next(dieMap) == nil then
+        DiceVision.rules.valueMappings[dieType] = nil
+    end
+    chat.Send(string.format("[DiceVision] Removed mapping %s: %d", dieType, fromVal))
+    return true
+end
+
+DiceVision.setDiceSelection = function(mode, count)
+    count = tonumber(count)
+    if mode == "auto" or mode == "clear" then
+        DiceVision.rules.diceSelection = nil
+        chat.Send("[DiceVision] Dice selection: auto-detect from roll context")
+    elseif mode and count then
+        DiceVision.rules.diceSelection = {keep = mode, count = count}
+        chat.Send(string.format("[DiceVision] Dice selection: keep %s %d", mode, count))
+    else
+        chat.Send("[DiceVision] Usage: /dv rules keep <highest|lowest|auto> [count]")
+    end
+    return DiceVision.rules.diceSelection
+end
+
+DiceVision.setClampOutOfRange = function(enabled)
+    DiceVision.rules.clampOutOfRange = enabled and true or false
+    if DiceVision.rules.clampOutOfRange then
+        chat.Send("[DiceVision] Out-of-range clamping enabled (values outside 0-10 -> 1)")
+    else
+        chat.Send("[DiceVision] Out-of-range clamping disabled")
+    end
+    return DiceVision.rules.clampOutOfRange
+end
+
+DiceVision.clearRules = function(clearAll)
+    DiceVision.rules = {valueMappings = {}, diceSelection = nil, clampOutOfRange = false}
+    if clearAll then
+        chat.Send("[DiceVision] All rules cleared (including defaults)")
+    else
+        for dieType, mappings in pairs(DEFAULT_RULES.valueMappings) do
+            DiceVision.rules.valueMappings[dieType] = {}
+            for from, to in pairs(mappings) do
+                DiceVision.rules.valueMappings[dieType][from] = to
+            end
+        end
+        chat.Send("[DiceVision] Rules reset to defaults")
+    end
+end
+
+DiceVision.disconnect = function()
+    abandonPendingRoll()
+    stopPolling()
+    removeRollInterceptor()
+    DiceVision.sessionCode = nil
+    DiceVision.connected = false
+    DiceVision.mode = "off"
+    chat.Send("[DiceVision] Disconnected")
+end
+
+DiceVision.refreshHooks = function()
+    -- Drop the cached snapshot so the next register reads RollDialog afresh.
+    -- Escape hatch for (1) Codex hot-reload changing declared hooks, (2) a
+    -- snapshot locked all-false at first probe (RollDialog nil or no slots yet).
+    printf("DV: /dv refresh invoked")
+    DiceVision.codexDeclaredHooks = nil
+    registerHooks(true)
+    chat.Send("[DiceVision] Hook probe refreshed. See /dv status for current state.")
+end
+
+DiceVision.testConnection = function(onResult)
+    chat.Send("[DiceVision] Testing API connection...")
+    net.Get{
+        url = DiceVision.baseUrl,
+        success = function(data)
+            chat.Send("[DiceVision] API is reachable!")
+            if onResult then onResult(true, data) end
+        end,
+        error = function(err)
+            chat.Send("[DiceVision] API error: " .. tostring(err))
+            if onResult then onResult(false, err) end
+        end,
+    }
+end
+
+-- Snapshot of connection + hook state for the /dv status formatter and the
+-- settings popup status display, so both read from one source.
+DiceVision.getStatus = function()
+    local hooks = DiceVision.hooksRegistered
+        or { ability = false, reroll = false, ["table"] = false }
+    local missing = {}
+    for _, spec in ipairs(HOOK_SPECS) do
+        if not hooks[spec.key] then
+            missing[#missing + 1] = "RollDialog." .. spec.name
+        end
+    end
+    return {
+        connected = DiceVision.connected,
+        sessionCode = DiceVision.sessionCode,
+        mode = DiceVision.mode,
+        isPolling = DiceVision.isPolling,
+        hooks = hooks,
+        missing = missing,
+    }
+end
+
+-- ============================================================================
 -- Commands
 -- ============================================================================
 
@@ -1014,47 +1149,26 @@ Commands.dv = function(args)
         DiceVision.connect(parts[2])
 
     elseif subcommand == "disconnect" then
-        abandonPendingRoll()
-        stopPolling()
-        removeRollInterceptor()
-        DiceVision.sessionCode = nil
-        DiceVision.connected = false
-        DiceVision.mode = "off"
-        chat.Send("[DiceVision] Disconnected")
+        DiceVision.disconnect()
 
     elseif subcommand == "status" then
-        local hooks = DiceVision.hooksRegistered
-            or { ability = false, reroll = false, ["table"] = false }
+        local s = DiceVision.getStatus()
         local function yn(v) return v and "YES" or "NO" end
-        local missing = {}
-        for _, spec in ipairs(HOOK_SPECS) do
-            if not hooks[spec.key] then
-                missing[#missing + 1] = "RollDialog." .. spec.name
-            end
-        end
         local status = string.format(
             "[DiceVision] Status:\n  Connected: %s\n  Session: %s\n  Mode: %s\n  Polling: %s\n  Hooks: ability=%s, reroll=%s, table=%s",
-            tostring(DiceVision.connected),
-            DiceVision.sessionCode or "none",
-            DiceVision.mode,
-            tostring(DiceVision.isPolling),
-            yn(hooks.ability), yn(hooks.reroll), yn(hooks["table"])
+            tostring(s.connected),
+            s.sessionCode or "none",
+            s.mode,
+            tostring(s.isPolling),
+            yn(s.hooks.ability), yn(s.hooks.reroll), yn(s.hooks["table"])
         )
-        if #missing > 0 then
-            status = status .. "\n  Missing Codex hooks: " .. table.concat(missing, ", ")
+        if #s.missing > 0 then
+            status = status .. "\n  Missing Codex hooks: " .. table.concat(s.missing, ", ")
         end
         chat.Send(status)
 
     elseif subcommand == "refresh" then
-        -- Drop the cached snapshot so the next register reads RollDialog
-        -- afresh. The user-visible escape hatch for two failure shapes:
-        -- (1) Codex hot-reload changes which hooks are declared,
-        -- (2) snapshot was locked all-false at first probe (RollDialog nil,
-        -- or RollDialog present but no hook slots declared yet).
-        printf("DV: /dv refresh invoked")
-        DiceVision.codexDeclaredHooks = nil
-        registerHooks(true)
-        chat.Send("[DiceVision] Hook probe refreshed. See /dv status for current state.")
+        DiceVision.refreshHooks()
 
     elseif subcommand == "mode" then
         local newMode = parts[2]
@@ -1076,16 +1190,7 @@ Commands.dv = function(args)
         end
 
     elseif subcommand == "test" then
-        chat.Send("[DiceVision] Testing API connection...")
-        net.Get{
-            url = DiceVision.baseUrl,
-            success = function(data)
-                chat.Send("[DiceVision] API is reachable!")
-            end,
-            error = function(err)
-                chat.Send("[DiceVision] API error: " .. tostring(err))
-            end,
-        }
+        DiceVision.testConnection()
 
     elseif subcommand == "testtimeout" then
         local seconds = tonumber(parts[2])
@@ -1145,58 +1250,24 @@ Commands.dv = function(args)
             chat.Send(msg)
 
         elseif action == "map" then
-            local dieType = parts[3]
-            local fromVal = tonumber(parts[4])
-            local toVal = tonumber(parts[5])
-            if dieType and fromVal and toVal then
-                DiceVision.rules.valueMappings[dieType] = DiceVision.rules.valueMappings[dieType] or {}
-                DiceVision.rules.valueMappings[dieType][fromVal] = toVal
-                chat.Send(string.format("[DiceVision] Mapped %s: %d -> %d", dieType, fromVal, toVal))
-            else
-                chat.Send("[DiceVision] Usage: /dv rules map <dieType> <fromValue> <toValue>")
-            end
+            DiceVision.setValueMapping(parts[3], parts[4], parts[5])
 
         elseif action == "keep" then
-            local mode = parts[3]
-            local count = tonumber(parts[4])
-            if mode == "auto" or mode == "clear" then
-                DiceVision.rules.diceSelection = nil
-                chat.Send("[DiceVision] Dice selection: auto-detect from roll context")
-            elseif mode and count then
-                DiceVision.rules.diceSelection = {keep = mode, count = count}
-                chat.Send(string.format("[DiceVision] Dice selection: keep %s %d", mode, count))
-            else
-                chat.Send("[DiceVision] Usage: /dv rules keep <highest|lowest|auto> [count]")
-            end
+            DiceVision.setDiceSelection(parts[3], parts[4])
 
         elseif action == "clamp" then
             local mode = parts[3]
             if mode == "on" then
-                DiceVision.rules.clampOutOfRange = true
-                chat.Send("[DiceVision] Out-of-range clamping enabled (values outside 0-10 -> 1)")
+                DiceVision.setClampOutOfRange(true)
             elseif mode == "off" then
-                DiceVision.rules.clampOutOfRange = false
-                chat.Send("[DiceVision] Out-of-range clamping disabled")
+                DiceVision.setClampOutOfRange(false)
             else
                 local status = DiceVision.rules.clampOutOfRange and "enabled" or "disabled"
                 chat.Send("[DiceVision] Out-of-range clamping: " .. status .. "\nUsage: /dv rules clamp <on|off>")
             end
 
         elseif action == "clear" then
-            local clearAll = parts[3] == "all"
-            if clearAll then
-                DiceVision.rules = {valueMappings = {}, diceSelection = nil, clampOutOfRange = false}
-                chat.Send("[DiceVision] All rules cleared (including defaults)")
-            else
-                DiceVision.rules = {valueMappings = {}, diceSelection = nil, clampOutOfRange = false}
-                for dieType, mappings in pairs(DEFAULT_RULES.valueMappings) do
-                    DiceVision.rules.valueMappings[dieType] = {}
-                    for from, to in pairs(mappings) do
-                        DiceVision.rules.valueMappings[dieType][from] = to
-                    end
-                end
-                chat.Send("[DiceVision] Rules reset to defaults")
-            end
+            DiceVision.clearRules(parts[3] == "all")
 
         else
             chat.Send([=[
