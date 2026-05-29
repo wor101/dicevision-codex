@@ -91,6 +91,46 @@ local diceVisionPanelStyles = {
     },
 }
 
+-- Connect popup styles. Popups are a styling island (popupsInheritStyles
+-- defaults false), so the connect popup carries its own style table rather
+-- than relying on diceVisionPanelStyles above.
+local connectPopupStyles = {
+    {
+        classes = "dvConnectInput",
+        bgimage = "panels/square.png",
+        bgcolor = "#0d0d0dff",
+        color = "white",
+        width = 140,
+        height = 24,
+        fontSize = 12,
+        pad = 4,
+        cornerRadius = 3,
+        borderWidth = 1,
+        borderColor = "#555555",
+    },
+    {
+        classes = "dvConnectBtn",
+        bgimage = "panels/square.png",
+        bgcolor = "#2d7a2d",
+        color = "white",
+        width = 140,
+        height = 24,
+        halign = "center",
+        valign = "center",
+        cornerRadius = 4,
+        fontSize = 12,
+    },
+    {
+        classes = {"dvConnectBtn", "hover"},
+        brightness = 1.2,
+    },
+    {
+        classes = {"dvConnectBtn", "disabled"},
+        bgcolor = "#333333",
+        brightness = 0.3,
+    },
+}
+
 -- ============================================================================
 -- Panel Creation
 -- ============================================================================
@@ -150,6 +190,117 @@ CreateDiceVisionPanel = function()
         end
     end
 
+    -- Builds the connect popup spawned from the (disconnected) dice button.
+    -- hostPanel is the dice button so the async connect callback can close the
+    -- popup by clearing hostPanel.popup. The connect contract itself lives in
+    -- DiceVision.connect; this just gathers the code and reflects status.
+    local CreateConnectPopup = function(hostPanel)
+        local input
+        local statusLine
+        local connectButton
+        local connecting = false
+
+        local doConnect = function()
+            if connecting then
+                return
+            end
+            local code = (input and input.text or ""):gsub("%s+", "")
+            if code == "" then
+                statusLine.text = "Enter a session code"
+                return
+            end
+            connecting = true
+            connectButton:SetClass("disabled", true)
+            statusLine.text = "Connecting..."
+            DiceVision.connect(code, function(success, result)
+                connecting = false
+                if success then
+                    if hostPanel then
+                        hostPanel.popup = nil
+                    end
+                else
+                    connectButton:SetClass("disabled", false)
+                    statusLine.text = "Failed: " .. tostring(result)
+                end
+            end)
+        end
+
+        input = gui.Input{
+            classes = "dvConnectInput",
+            placeholderText = "session code",
+            lineType = "SingleLine",
+            selectAllOnFocus = true,
+            characterLimit = 16,
+            text = "",
+            submit = function(element) doConnect() end,
+        }
+
+        statusLine = gui.Label{
+            interactable = false,
+            width = 140,
+            height = "auto",
+            halign = "center",
+            fontSize = 9,
+            color = "#cccccc",
+            text = "",
+        }
+
+        connectButton = gui.Panel{
+            classes = "dvConnectBtn",
+            hover = gui.Tooltip{
+                text = "Connect to this DiceVision session",
+            },
+            click = function(panel) doConnect() end,
+
+            gui.Label{
+                interactable = false,
+                width = "100%",
+                height = "100%",
+                halign = "center",
+                valign = "center",
+                color = "white",
+                fontSize = 12,
+                text = "Connect",
+            },
+        }
+
+        return gui.Panel{
+            styles = connectPopupStyles,
+            flow = "vertical",
+            width = "auto",
+            height = "auto",
+            pad = 8,
+            bgimage = "panels/square.png",
+            bgcolor = "#1a1a1aff",
+            cornerRadius = 6,
+            borderWidth = 1,
+            borderColor = "#666666",
+            captureEscape = true,
+            escapePriority = 10,
+            escape = function(element)
+                if hostPanel then
+                    hostPanel.popup = nil
+                end
+            end,
+
+            gui.Label{
+                interactable = false,
+                width = "auto",
+                height = "auto",
+                halign = "center",
+                fontSize = 11,
+                bold = true,
+                color = "white",
+                text = "DiceVision",
+                bmargin = 4,
+            },
+            input,
+            gui.Panel{ width = 140, height = 4 },
+            connectButton,
+            statusLine,
+        }
+    end
+
     diceButton = gui.Panel{
         classes = "dvButton",
         bgimage = "ui-icons/dsdice/djordice-2d10-filled.png",
@@ -162,7 +313,14 @@ CreateDiceVisionPanel = function()
 
         click = function(panel)
             if not DiceVision.connected then
-                chat.Send("[DiceVision] Not connected. Use /dv connect <code> first.")
+                -- Disconnected: open (or toggle closed) the connect popup
+                -- anchored to the dice button instead of the old chat hint.
+                if panel.popup ~= nil then
+                    panel.popup = nil
+                    return
+                end
+                panel.popupPositioning = "panel"
+                panel.popup = CreateConnectPopup(panel)
                 return
             end
 

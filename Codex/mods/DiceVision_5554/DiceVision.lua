@@ -965,6 +965,39 @@ DiceVision._panelToggle = function()
     return newMode
 end
 
+-- Connect entry point shared by the /dv connect command and the panel connect
+-- popup. Extracted from the command handler so the connect contract -- normalize
+-- the code, set sessionCode, validate, on success flip to replace mode and
+-- register hooks, on failure clear sessionCode -- has a single unit-testable
+-- seam. onResult(success, result) is optional and fires after validation
+-- resolves; the chat command passes nil. Mirrors DiceVision._panelToggle.
+DiceVision.connect = function(code, onResult)
+    code = (code and code:gsub("%s+", "")) or ""
+    if code == "" then
+        chat.Send("[DiceVision] Usage: /dv connect <session_code>")
+        if onResult then onResult(false, "No session code") end
+        return
+    end
+
+    DiceVision.sessionCode = code:upper()
+    chat.Send("[DiceVision] Connecting to session " .. DiceVision.sessionCode .. "...")
+
+    validateSession(function(success, result)
+        if success then
+            DiceVision.mode = "replace"
+            -- Probe-and-register: warn the user about any hook the Codex
+            -- install is missing so they know which roll types will fall
+            -- back to virtual dice.
+            registerHooks(true)
+            chat.Send("[DiceVision] Connected! Ready to capture dice rolls.")
+        else
+            chat.Send("[DiceVision] Connection failed: " .. tostring(result))
+            DiceVision.sessionCode = nil
+        end
+        if onResult then onResult(success, result) end
+    end)
+end
+
 -- ============================================================================
 -- Commands
 -- ============================================================================
@@ -978,28 +1011,7 @@ Commands.dv = function(args)
     local subcommand = parts[1] or "help"
 
     if subcommand == "connect" then
-        local code = parts[2]
-        if not code then
-            chat.Send("[DiceVision] Usage: /dv connect <session_code>")
-            return
-        end
-
-        DiceVision.sessionCode = code:upper()
-        chat.Send("[DiceVision] Connecting to session " .. DiceVision.sessionCode .. "...")
-
-        validateSession(function(success, result)
-            if success then
-                DiceVision.mode = "replace"
-                -- Probe-and-register: warn the user about any hook the Codex
-                -- install is missing so they know which roll types will fall
-                -- back to virtual dice.
-                registerHooks(true)
-                chat.Send("[DiceVision] Connected! Ready to capture dice rolls.")
-            else
-                chat.Send("[DiceVision] Connection failed: " .. tostring(result))
-                DiceVision.sessionCode = nil
-            end
-        end)
+        DiceVision.connect(parts[2])
 
     elseif subcommand == "disconnect" then
         abandonPendingRoll()
