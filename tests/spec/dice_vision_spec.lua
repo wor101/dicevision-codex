@@ -9,6 +9,17 @@ describe("DiceVision", function()
         resetDiceVisionState()
     end)
 
+    -- Shared across the contract blocks below: true if any sent chat message
+    -- contains substr (plain-text, not a Lua pattern).
+    local function chatHas(substr)
+        for _, entry in ipairs(_G._chatLog) do
+            if entry.type == "send" and string.find(entry.message, substr, 1, true) then
+                return true
+            end
+        end
+        return false
+    end
+
     -- ============================================================================
     -- Category 1: Pure Utility Functions
     -- ============================================================================
@@ -2946,15 +2957,6 @@ describe("DiceVision", function()
             end
         end
 
-        local function chatHas(substr)
-            for _, entry in ipairs(_G._chatLog) do
-                if entry.type == "send" and string.find(entry.message, substr) then
-                    return true
-                end
-            end
-            return false
-        end
-
         it("on success sets connected, replace mode, uppercased code, and fires onResult(true)", function()
             stubSession("active")
             local cbSuccess, cbResult
@@ -3159,15 +3161,6 @@ describe("DiceVision", function()
         -- The settings popup and the /dv rules commands share these seams.
         -- Coercion/validation lives in the seam (the popup passes raw text), so
         -- it is pinned here. Mirrors the connect/_panelToggle contract blocks.
-        local function chatHas(substr)
-            for _, entry in ipairs(_G._chatLog) do
-                if entry.type == "send" and string.find(entry.message, substr, 1, true) then
-                    return true
-                end
-            end
-            return false
-        end
-
         it("setValueMapping creates the nested table, sets the value, returns true", function()
             DiceVision.rules.valueMappings = {}
             local ok = DiceVision.setValueMapping("d20", "0", "20")
@@ -3260,15 +3253,6 @@ describe("DiceVision", function()
         after_each(function()
             _G.net.Get = originalNetGet
         end)
-
-        local function chatHas(substr)
-            for _, entry in ipairs(_G._chatLog) do
-                if entry.type == "send" and string.find(entry.message, substr, 1, true) then
-                    return true
-                end
-            end
-            return false
-        end
 
         it("disconnect clears connection state, sets mode off, stops polling", function()
             DiceVision.connected = true

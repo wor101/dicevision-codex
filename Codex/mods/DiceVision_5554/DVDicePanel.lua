@@ -214,6 +214,18 @@ local settingsPopupStyles = {
 -- Panel Creation
 -- ============================================================================
 
+-- Open the popup built by `factory(hostPanel)` anchored to hostPanel, or close
+-- it if already open (click-to-toggle). Shared by the connect toggle and the
+-- settings gear so both behave identically.
+local function togglePopup(hostPanel, factory)
+    if hostPanel.popup ~= nil then
+        hostPanel.popup = nil
+        return
+    end
+    hostPanel.popupPositioning = "panel"
+    hostPanel.popup = factory(hostPanel)
+end
+
 CreateDiceVisionPanel = function()
     local diceStyle = dmhub.GetDiceStyling(
         dmhub.GetSettingValue("diceequipped"),
@@ -451,6 +463,14 @@ CreateDiceVisionPanel = function()
             lowBtn:SetClass("selected", mode == "lowest")
         end
 
+        -- Repaint every rules control at once (rebuildMappingRows is a forward-
+        -- declared upvalue, assigned below before this is ever called).
+        local function refreshAllRules()
+            refreshClamp()
+            refreshKeep()
+            rebuildMappingRows()
+        end
+
         rebuildMappingRows = function()
             local rows = {}
             for dieType, mappings in pairs(DiceVision.rules.valueMappings) do
@@ -623,10 +643,10 @@ CreateDiceVisionPanel = function()
             gui.Panel{
                 flow = "horizontal", width = "100%", height = "auto", tmargin = 4,
                 buildButton("Reset defaults", function()
-                    DiceVision.clearRules(false); refreshClamp(); refreshKeep(); rebuildMappingRows()
+                    DiceVision.clearRules(false); refreshAllRules()
                 end),
                 buildButton("Clear all", function()
-                    DiceVision.clearRules(true); refreshClamp(); refreshKeep(); rebuildMappingRows()
+                    DiceVision.clearRules(true); refreshAllRules()
                 end),
             },
         }
@@ -775,13 +795,7 @@ CreateDiceVisionPanel = function()
         click = function(panel)
             if not DiceVision.connected then
                 -- Disconnected: this button is the Connect call-to-action.
-                -- Open (or toggle closed) the connect popup anchored here.
-                if panel.popup ~= nil then
-                    panel.popup = nil
-                    return
-                end
-                panel.popupPositioning = "panel"
-                panel.popup = CreateConnectPopup(panel)
+                togglePopup(panel, CreateConnectPopup)
                 return
             end
             -- Connected: the toggle contract (compute opposite mode, pass
@@ -869,12 +883,7 @@ CreateDiceVisionPanel = function()
                 { classes = "hover", scale = 1.15, brightness = 1.2 },
             },
             click = function(panel)
-                if panel.popup ~= nil then
-                    panel.popup = nil
-                    return
-                end
-                panel.popupPositioning = "panel"
-                panel.popup = CreateSettingsPopup(panel)
+                togglePopup(panel, CreateSettingsPopup)
             end,
         },
     }
