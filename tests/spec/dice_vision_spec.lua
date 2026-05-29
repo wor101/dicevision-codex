@@ -3302,10 +3302,17 @@ describe("DiceVision", function()
             assert.are.equal(0, #s.missing)
         end)
 
-        it("getStatus lists missing hooks when none are registered", function()
+        it("getStatus lists missing hooks by RollDialog name when none are registered", function()
             DiceVision.hooksRegistered = {ability = false, reroll = false, ["table"] = false}
             local s = DiceVision.getStatus()
             assert.are.equal(3, #s.missing)
+            -- Pin the formatting contract (feeds both /dv status and the popup),
+            -- not just the count, so a mislabeled hook name is caught.
+            local joined = table.concat(s.missing, ",")
+            assert.is_truthy(string.find(joined, "RollDialog.", 1, true))
+            for _, name in ipairs({"RollDialog.OnBeforeRoll", "RollDialog.OnReroll", "RollDialog.OnBeforeTableRoll"}) do
+                assert.is_truthy(string.find(joined, name, 1, true))
+            end
         end)
     end)
 end)

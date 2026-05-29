@@ -406,12 +406,15 @@ CreateDiceVisionPanel = function()
     -- gear; the popup closes by clearing hostPanel.popup. Config mutations and
     -- diagnostic actions go through the DiceVision.* seams so the popup carries
     -- no logic of its own (matching the connect popup). The status section
-    -- refreshes on a think tick (it changes via async test/disconnect); the
-    -- rules controls refresh on demand after each edit so they do not clobber
-    -- text the user is typing into the add-mapping inputs.
+    -- refreshes on a think tick because it can change from outside the popup
+    -- (chat /dv commands, a poll-timeout disconnect, late hook registration);
+    -- the rules controls refresh on demand after each edit so they do not
+    -- clobber text the user is typing into the add-mapping inputs.
     local CreateSettingsPopup = function(hostPanel)
         local popupPanel
         local statusInfo, testLine
+        local addStatus
+        local testing = false
         local clampBtn, clampLabel
         local autoBtn, highBtn, lowBtn, countInput
         local mappingRows
@@ -461,6 +464,9 @@ CreateDiceVisionPanel = function()
             autoBtn:SetClass("selected", mode == "auto")
             highBtn:SetClass("selected", mode == "highest")
             lowBtn:SetClass("selected", mode == "lowest")
+            -- Count only applies to highest/lowest; disable it in auto mode so a
+            -- typed count is not silently ignored.
+            countInput.editable = (mode ~= "auto")
         end
 
         -- Repaint every rules control at once (rebuildMappingRows is a forward-
@@ -565,12 +571,18 @@ CreateDiceVisionPanel = function()
         addDie = gui.Input{ classes = "dvSetInput", width = 48, lineType = "SingleLine", placeholderText = "die", text = "" }
         addFrom = gui.Input{ classes = "dvSetInput", width = 36, numeric = true, lineType = "SingleLine", placeholderText = "from", text = "" }
         addTo = gui.Input{ classes = "dvSetInput", width = 36, numeric = true, lineType = "SingleLine", placeholderText = "to", text = "" }
+        addStatus = gui.Label{ classes = "dvSetInfo", width = "100%", height = "auto", text = "" }
         local addBtn = buildButton("Add", function()
+            -- The seam also chats a usage line on failure, but the chat window is
+            -- a different surface; give popup-local feedback like the connect popup.
             if DiceVision.setValueMapping(addDie.text, addFrom.text, addTo.text) then
                 addDie.text = ""
                 addFrom.text = ""
                 addTo.text = ""
+                addStatus.text = ""
                 rebuildMappingRows()
+            else
+                addStatus.text = "Enter a die and numeric from/to"
             end
         end)
 
@@ -610,9 +622,20 @@ CreateDiceVisionPanel = function()
                 flow = "horizontal", width = "100%", height = "auto", tmargin = 4,
                 buildButton("Disconnect", function() DiceVision.disconnect(); refreshStatus() end),
                 buildButton("Refresh", function() DiceVision.refreshHooks(); refreshStatus() end),
-                buildButton("Test", function()
+                buildButton("Test", function(panel)
+                    -- In-flight guard (like the connect popup): block concurrent
+                    -- net.Get calls so repeated clicks do not spam chat or race
+                    -- to write testLine out of order.
+                    if testing then
+                        return
+                    end
+                    testing = true
+                    panel:SetClass("disabled", true)
+                    testLine.text = "Testing..."
                     DiceVision.testConnection(function(success)
+                        testing = false
                         if hostPanel and hostPanel.popup == popupPanel then
+                            panel:SetClass("disabled", false)
                             testLine.text = success and "API reachable" or "API error"
                         end
                     end)
@@ -640,6 +663,7 @@ CreateDiceVisionPanel = function()
                 flow = "horizontal", width = "100%", height = "auto", valign = "center", tmargin = 4,
                 addDie, addFrom, addTo, addBtn,
             },
+            addStatus,
             gui.Panel{
                 flow = "horizontal", width = "100%", height = "auto", tmargin = 4,
                 buildButton("Reset defaults", function()

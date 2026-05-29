@@ -1001,13 +1001,14 @@ end
 -- ============================================================================
 -- Settings & diagnostic seams
 -- ============================================================================
--- Shared by the /dv commands and the DVDicePanel settings popup. Each seam
--- performs one config mutation or diagnostic action and emits the same chat
--- confirmation its /dv subcommand emitted, so behavior is preserved and the
--- popup gets identical feedback. Follows the same extract-for-testability
--- pattern as DiceVision.connect / DiceVision._panelToggle: validation and
--- numeric coercion live here (not in the popup) so they are unit-testable and
--- the popup can pass raw input text.
+-- Shared by the /dv commands and the DVDicePanel settings popup. Each action
+-- seam performs one config mutation or diagnostic action and emits the same
+-- chat confirmation its /dv subcommand emitted, so behavior is preserved and
+-- the popup gets identical feedback. (getStatus is the exception: a read-only
+-- snapshot that emits no chat, consumed by both surfaces.) Follows the same
+-- extract-for-testability pattern as DiceVision.connect / DiceVision._panelToggle:
+-- validation and numeric coercion live here (not in the popup) so they are
+-- unit-testable and the popup can pass raw input text.
 
 DiceVision.setValueMapping = function(dieType, fromVal, toVal)
     fromVal = tonumber(fromVal)
