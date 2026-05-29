@@ -3014,6 +3014,12 @@ describe("DiceVision", function()
             assert.are.equal("AB1", DiceVision.sessionCode)
         end)
 
+        it("strips interior whitespace, not just surrounding", function()
+            stubSession("active")
+            DiceVision.connect("a b 1")
+            assert.are.equal("AB1", DiceVision.sessionCode)
+        end)
+
         it("/dv connect command delegates to DiceVision.connect", function()
             stubSession("active")
             Commands.dv("connect ab1")

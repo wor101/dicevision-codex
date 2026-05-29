@@ -196,14 +196,15 @@ CreateDiceVisionPanel = function()
         end
     end
 
-    -- Builds the connect popup spawned from the (disconnected) dice button.
-    -- hostPanel is the dice button so the async connect callback can close the
-    -- popup by clearing hostPanel.popup. The connect contract itself lives in
-    -- DiceVision.connect; this just gathers the code and reflects status.
+    -- Builds the connect popup spawned from the (disconnected) toggle button.
+    -- hostPanel is the toggle button so the async connect callback can close
+    -- the popup by clearing hostPanel.popup. The connect contract itself lives
+    -- in DiceVision.connect; this just gathers the code and reflects status.
     local CreateConnectPopup = function(hostPanel)
         local input
         local statusLine
         local connectButton
+        local popupPanel
         local connecting = false
 
         local doConnect = function()
@@ -224,7 +225,11 @@ CreateDiceVisionPanel = function()
                     if hostPanel then
                         hostPanel.popup = nil
                     end
-                else
+                -- net.Get is async in production, so the user may have closed
+                -- the popup (escape, or re-clicking the toggle) before this
+                -- fires. Only touch the popup widgets if this popup is still
+                -- the host's active one; otherwise they are detached.
+                elseif hostPanel and hostPanel.popup == popupPanel then
                     connectButton:SetClass("disabled", false)
                     statusLine.text = "Failed: " .. tostring(result)
                 end
@@ -270,7 +275,7 @@ CreateDiceVisionPanel = function()
             },
         }
 
-        return gui.Panel{
+        popupPanel = gui.Panel{
             styles = connectPopupStyles,
             flow = "vertical",
             width = "auto",
@@ -305,6 +310,8 @@ CreateDiceVisionPanel = function()
             connectButton,
             statusLine,
         }
+
+        return popupPanel
     end
 
     diceButton = gui.Panel{
