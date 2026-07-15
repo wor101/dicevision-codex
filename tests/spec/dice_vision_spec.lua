@@ -3344,14 +3344,14 @@ describe("DiceVision", function()
 
         it("passes the intact expression and forcedDice to dmhub.Roll", function()
             setupReplaceMode()
-            local setActiveRollCalled = false
+            local setActiveRollArg = nil
             DiceVision.pendingRoll = {
                 rollArgs = { roll = "2d10+5", creature = nil },
                 originalRoll = "2d10+5",
                 description = "Forced Test",
                 edges = 0,
                 banes = 0,
-                setActiveRoll = function() setActiveRollCalled = true end,
+                setActiveRoll = function(roll) setActiveRollArg = roll end,
             }
             DiceVision.waitingForRoll = true
 
@@ -3375,7 +3375,10 @@ describe("DiceVision", function()
             assert.is_nil(logged.boons)
             assert.is_nil(logged.banes)
             assert.is_nil(logged.instant)
-            assert.is_true(setActiveRollCalled)
+            -- setActiveRoll must receive the object dmhub.Roll returned
+            -- (the stub returns {id = "roll-N"}), not just be called.
+            assert.is_not_nil(setActiveRollArg)
+            assert.are.equal("roll-1", setActiveRollArg.id)
         end)
 
         it("does not zero multitargets boons on targeted rolls", function()
@@ -3436,9 +3439,18 @@ describe("DiceVision", function()
             for _, entry in ipairs(_G._chatLog) do
                 assert.are_not.equal("custom", entry.type)
             end
-            -- No complete wrapper installed when the card is off and the
-            -- original rollArgs had none.
-            assert.is_nil(_G._dmhubRollLog[1].complete)
+            -- The complete wrapper is always installed (it carries the
+            -- forcedDice verification), but with the card off it must not
+            -- send a custom message even after the roll completes.
+            local logged = _G._dmhubRollLog[1]
+            assert.is_function(logged.complete)
+            logged.complete({ rolls = {
+                { result = 7, numFaces = 10 },
+                { result = 3, numFaces = 10 },
+            }})
+            for _, entry in ipairs(_G._chatLog) do
+                assert.are_not.equal("custom", entry.type)
+            end
         end)
 
         it("sends the chat card from the complete wrapper when enabled", function()
@@ -3559,6 +3571,10 @@ describe("DiceVision", function()
             assert.are.equal("15", logged.roll)
             assert.is_true(logged.instant)
             assert.is_nil(logged.forcedDice)
+            -- The mismatch is player-actionable, so the fallback must be
+            -- announced in chat, not just the debug console.
+            assert.is_true(chatHas("Physical dice do not match the roll"))
+            assert.is_true(chatHas("wrong number of dice"))
         end)
 
         it("falls back to the legacy path for unsupported dice", function()
@@ -3584,6 +3600,76 @@ describe("DiceVision", function()
             assert.is_not_nil(logged)
             assert.is_nil(logged.forcedDice)
             assert.is_true(logged.instant)
+            -- Pin the legacy total too, not just the absence of forcedDice.
+            assert.are.equal("7", logged.roll)
+        end)
+
+        it("uses the engine ParseRoll/RollToString round-trip end to end", function()
+            -- Production Codex has both APIs; the default test stubs force
+            -- the textual fallback everywhere else, so this test wires live
+            -- stubs to exercise the branch users actually run, including
+            -- the creature pass-through.
+            setupReplaceMode()
+            local parseCreature = nil
+            dmhub.ParseRoll = function(rollStr, creature)
+                parseCreature = creature
+                return { boons = 1, banes = 0 }
+            end
+            dmhub.RollToString = function(parsed) return "2d10+5" end
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5 1 edge", creature = "creature-9" },
+                originalRoll = "2d10+5 1 edge",
+                description = "Round-trip Test",
+                edges = 1,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            })
+
+            local logged = _G._dmhubRollLog[1]
+            -- The ORIGINAL expression (with the edge) goes to the engine;
+            -- the round-trip only cleans the dice-extraction input.
+            assert.are.equal("2d10+5 1 edge", logged.roll)
+            assert.are.same(
+                {{numFaces = 10, result = 7}, {numFaces = 10, result = 3}},
+                logged.forcedDice)
+            assert.are.equal("creature-9", parseCreature)
+        end)
+
+        it("characterizes the d10-centric clamp on non-d10 dice", function()
+            -- Known limitation pinned on purpose: the clamp rule is defined
+            -- as "outside 0-10 -> 1", so with clamp enabled a legitimate
+            -- physical d20 result above 10 is clamped to 1 and forced as
+            -- such. Users rolling non-d10 dice should keep clamp off.
+            setupReplaceMode()
+            DiceVision.rules.clampOutOfRange = true
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "1d20", creature = nil },
+                originalRoll = "1d20",
+                description = "Clamp d20 Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d20", value = 15 },
+                },
+                total = 15,
+            })
+
+            local logged = _G._dmhubRollLog[1]
+            assert.are.same({{numFaces = 20, result = 1}}, logged.forcedDice)
         end)
 
         it("uses the legacy path when the toggle is off", function()
@@ -3611,6 +3697,245 @@ describe("DiceVision", function()
             assert.are.equal("15", logged.roll)
             assert.is_true(logged.instant)
             assert.is_nil(logged.forcedDice)
+        end)
+
+        it("auto-disables with a warning when the engine ignored forcedDice", function()
+            -- An unsupported Codex build silently ignores the forcedDice
+            -- field and rolls virtual dice. The complete wrapper compares
+            -- rollInfo.rolls against the forced values and must disable the
+            -- toggle loudly on a confirmed mismatch.
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Unsupported Build Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            })
+
+            local logged = _G._dmhubRollLog[1]
+            assert.is_function(logged.complete)
+            -- Engine rolled its own (virtual) values instead of ours.
+            logged.complete({ rolls = {
+                { result = 2, numFaces = 10 },
+                { result = 9, numFaces = 10 },
+            }})
+
+            assert.is_false(DiceVision.useForcedDice)
+            assert.is_true(chatHas("WARNING"))
+            assert.is_true(chatHas("VIRTUAL dice"))
+        end)
+
+        it("stays enabled when the engine honored forcedDice", function()
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Supported Build Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            })
+
+            _G._dmhubRollLog[1].complete({ rolls = {
+                { result = 7, numFaces = 10 },
+                { result = 3, numFaces = 10 },
+            }})
+
+            assert.is_true(DiceVision.useForcedDice)
+            assert.is_false(chatHas("WARNING"))
+        end)
+
+        it("still calls the original complete when the card send throws", function()
+            setupReplaceMode()
+            DiceVision.forcedDiceChatCard = true
+            local originalCompleteCalled = false
+            DiceVision.pendingRoll = {
+                rollArgs = {
+                    roll = "2d10+5",
+                    creature = nil,
+                    complete = function() originalCompleteCalled = true end,
+                },
+                originalRoll = "2d10+5",
+                description = "Card Throw Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            })
+
+            local originalSendCustom = chat.SendCustom
+            chat.SendCustom = function() error("card render failed") end
+            _G._dmhubRollLog[1].complete({ rolls = {
+                { result = 7, numFaces = 10 },
+                { result = 3, numFaces = 10 },
+            }})
+            chat.SendCustom = originalSendCustom
+
+            -- The cosmetic card must never block Codex's completion logic.
+            assert.is_true(originalCompleteCalled)
+        end)
+
+        it("falls back to the legacy reroll amend when forced construction fails on a reroll", function()
+            setupReplaceMode()
+            local amendFormula, amendExtra
+            local props = {
+                try_get = function(self, key) return rawget(self, key) end,
+            }
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil, properties = props },
+                originalRoll = "2d10+5",
+                description = "Reroll Fallback Test",
+                edges = 2,
+                banes = 0,
+                isReroll = true,
+                amendWithResult = function(formula, extra)
+                    amendFormula = formula
+                    amendExtra = extra
+                end,
+                activeRoll = { id = "roll-1" },
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            -- Three physical dice for a 2d10 expression: count mismatch on
+            -- the forced path must land in the LEGACY reroll amend, which
+            -- collapses to a literal and writes overrideTier for net +2.
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                    { type = "d10", value = 5 },
+                },
+                total = 15,
+            })
+
+            -- Legacy: diceSum 15 + modifier 5 = 20, net +2 edges = no flat
+            -- mod, tier 3 override.
+            assert.are.equal("20", amendFormula)
+            assert.is_nil(amendExtra)
+            assert.are.equal(3, props.overrideTier)
+            assert.are.equal(0, #_G._dmhubRollLog)
+        end)
+
+        it("reconciles surplus dice with an explicit keep rule before forcing", function()
+            setupReplaceMode()
+            DiceVision.rules.diceSelection = { keep = "highest", count = 2 }
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Surplus Keep Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                    { type = "d10", value = 5 },
+                },
+                total = 15,
+            })
+
+            local logged = _G._dmhubRollLog[1]
+            assert.are.equal("2d10+5", logged.roll)
+            -- Keep-highest 2 of {7,3,5} -> the two highest values forced.
+            assert.are.same(
+                {{numFaces = 10, result = 7}, {numFaces = 10, result = 5}},
+                logged.forcedDice)
+        end)
+
+        it("falls back to legacy when the keep rule cannot reconcile the count", function()
+            setupReplaceMode()
+            DiceVision.rules.diceSelection = { keep = "highest", count = 1 }
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10", creature = nil },
+                originalRoll = "2d10",
+                description = "Keep Mismatch Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            -- Keep 1 of 3 leaves 1 die for a 2-die expression: still a count
+            -- mismatch, so legacy must take over.
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                    { type = "d10", value = 5 },
+                },
+                total = 15,
+            })
+
+            local logged = _G._dmhubRollLog[1]
+            assert.is_nil(logged.forcedDice)
+            assert.is_true(logged.instant)
+        end)
+
+        it("falls back to legacy when the forced path raises an error", function()
+            -- The pcall at the fork is what keeps the "a roll is never
+            -- lost" contract true even for unanticipated errors (and stops
+            -- isPolling from being stranded true).
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Error Fallback Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            local originalExtract = DiceRollLogic.extractExpectedDiceList
+            DiceRollLogic.extractExpectedDiceList = function() error("boom") end
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            })
+            DiceRollLogic.extractExpectedDiceList = originalExtract
+
+            local logged = _G._dmhubRollLog[1]
+            assert.is_not_nil(logged)
+            assert.are.equal("15", logged.roll)
+            assert.is_true(logged.instant)
+            assert.is_nil(logged.forcedDice)
+            assert.is_false(DiceVision.isPolling)
         end)
     end)
 

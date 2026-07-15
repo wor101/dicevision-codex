@@ -14,15 +14,20 @@ DiceRollLogic = {}
 
 function DiceRollLogic.extractModifierFromRoll(rollStr)
     if not rollStr then return 0 end
-    local sign, num = rollStr:match("([%+%-])%s*(%d+)")
-    if sign and num then
-        local modifier = tonumber(num) or 0
-        if sign == "-" then
-            modifier = -modifier
+    -- Sum every standalone +N/-N term. The trailing [dD]? capture filters
+    -- out dice groups: in "1d10+2d6+3" the "+2" belongs to "+2d6" and must
+    -- not be read as a modifier.
+    local total = 0
+    for sign, num, dieSuffix in rollStr:gmatch("([%+%-])%s*(%d+)([dD]?)") do
+        if dieSuffix == "" then
+            local modifier = tonumber(num) or 0
+            if sign == "-" then
+                modifier = -modifier
+            end
+            total = total + modifier
         end
-        return modifier
     end
-    return 0
+    return total
 end
 
 function DiceRollLogic.getDiceFaces(dieType)
@@ -274,24 +279,38 @@ local SUPPORTED_FORCED_DICE = {
 -- expects (e.g. "2d10+3 1 bane" -> {10, 10}). Used to build the forcedDice
 -- table passed to dmhub.Roll. Returns nil if the expression is unparseable
 -- or contains unsupported dice, signalling the caller to use the legacy path.
--- Mirrors the official DicePanel.lua extractDiceList: prefer an engine
--- ParseRoll/RollToString round-trip to strip boons/banes so the dice regex
--- does not have to know about them; fall back to textual stripping when
--- those APIs are unavailable.
+-- The ParseRoll/RollToString round-trip (strip boons/banes so the dice regex
+-- does not have to know about them) mirrors the official DicePanel.lua
+-- extractDiceList. Divergence from the official (which returns nil when the
+-- APIs are unavailable): we fall back to textually stripping "N edge(s)"/
+-- "N bane(s)". The round-trip is pcall'd and type-checked because a throwing
+-- ParseRoll or a non-string RollToString must degrade to the textual strip,
+-- not crash the roll.
 function DiceRollLogic.extractExpectedDiceList(rollStr, creature)
     if type(rollStr) ~= "string" then
         return nil
     end
-    local cleanRoll = rollStr
+    local cleanRoll = nil
     if dmhub and dmhub.ParseRoll and dmhub.RollToString then
-        local parsed = dmhub.ParseRoll(rollStr, creature)
-        if parsed ~= nil then
+        local ok, result = pcall(function()
+            local parsed = dmhub.ParseRoll(rollStr, creature)
+            if parsed == nil then
+                return nil
+            end
             parsed.boons = nil
             parsed.banes = nil
-            cleanRoll = dmhub.RollToString(parsed) or rollStr
+            local s = dmhub.RollToString(parsed)
+            if type(s) == "string" then
+                return s
+            end
+            return nil
+        end)
+        if ok then
+            cleanRoll = result
         end
-    else
-        cleanRoll = cleanRoll:gsub("%d+%s+edges?", ""):gsub("%d+%s+banes?", "")
+    end
+    if cleanRoll == nil then
+        cleanRoll = rollStr:gsub("%d+%s+edges?", ""):gsub("%d+%s+banes?", "")
     end
     local diceList = {}
     for n, sides in string.gmatch(cleanRoll, "(%d*)[dD](%d+)") do
@@ -307,6 +326,16 @@ function DiceRollLogic.extractExpectedDiceList(rollStr, creature)
         return nil
     end
     return diceList
+end
+
+-- Strict die-type parse for buildForcedDice. Unlike getDiceFaces (which
+-- defaults unknown types to 10), an unrecognized type must never match a
+-- slot: a garbage entry like type="unknown" would otherwise force a d10.
+local function strictDiceFaces(dieType)
+    if type(dieType) ~= "string" then
+        return nil
+    end
+    return tonumber(dieType:match("^[dD](%d+)$"))
 end
 
 --- Build the forcedDice table for dmhub.Roll from physical dice.
@@ -329,7 +358,7 @@ function DiceRollLogic.buildForcedDice(dice, expectedFaces)
     for _, faces in ipairs(expectedFaces) do
         local found = nil
         for i, die in ipairs(dice) do
-            if not used[i] and DiceRollLogic.getDiceFaces(die.type) == faces then
+            if not used[i] and strictDiceFaces(die.type) == faces then
                 used[i] = true
                 found = die
                 break
@@ -338,15 +367,56 @@ function DiceRollLogic.buildForcedDice(dice, expectedFaces)
         if not found then
             return nil, "type-mismatch"
         end
-        -- Out-of-range values (e.g. an unmapped d10 "0" or a camera misread)
-        -- would be dropped engine-side with a warning; refuse instead so the
-        -- legacy path handles the roll deterministically.
-        if type(found.value) ~= "number" or found.value < 1 or found.value > faces then
+        -- Out-of-range and fractional values (e.g. an unmapped d10 "0" or a
+        -- camera misread) would be dropped engine-side with a warning;
+        -- refuse instead so the legacy path handles the roll
+        -- deterministically.
+        if type(found.value) ~= "number"
+            or found.value < 1 or found.value > faces
+            or found.value % 1 ~= 0 then
             return nil, "out-of-range"
         end
         forced[#forced + 1] = { numFaces = faces, result = found.value }
     end
     return forced
+end
+
+--- Verify the engine actually honored a forcedDice table by comparing it
+-- against the completed roll's rollInfo.rolls (each entry: {result, numFaces,
+-- ...}). forcedDice support cannot be feature-detected from Lua: an older
+-- Codex build silently ignores the field and rolls VIRTUAL dice, discarding
+-- the physical values. This post-roll check is how the mod finds out.
+-- Returns true if every forced entry appears in the rolled dice (subset
+-- match, since game-system mechanics may add dice beyond the forced ones),
+-- false on a confirmed mismatch, or nil when rollInfo carries no readable
+-- rolls array (cannot verify either way).
+function DiceRollLogic.forcedDiceHonored(rollInfo, forcedDice)
+    if rollInfo == nil or type(forcedDice) ~= "table" or #forcedDice == 0 then
+        return nil
+    end
+    -- rollInfo may be a plain table or a userdata-backed type; property
+    -- access on unexpected shapes must not throw inside a complete callback.
+    local ok, rolls = pcall(function() return rollInfo.rolls end)
+    if not ok or type(rolls) ~= "table" or #rolls == 0 then
+        return nil
+    end
+    local used = {}
+    for _, entry in ipairs(forcedDice) do
+        local found = false
+        for i, rolled in ipairs(rolls) do
+            if not used[i]
+                and rolled.numFaces == entry.numFaces
+                and rolled.result == entry.result then
+                used[i] = true
+                found = true
+                break
+            end
+        end
+        if not found then
+            return false
+        end
+    end
+    return true
 end
 
 -- ============================================================================

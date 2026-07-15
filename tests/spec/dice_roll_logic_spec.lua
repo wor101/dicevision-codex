@@ -29,10 +29,23 @@ describe("extractModifierFromRoll", function()
         assert.are.equal(100, DiceRollLogic.extractModifierFromRoll("1d20+100"))
     end)
 
-    it("extracts the first modifier when multiple signs exist", function()
+    it("sums multiple standalone modifiers", function()
+        assert.are.equal(8, DiceRollLogic.extractModifierFromRoll("2d10+5+3"))
+        assert.are.equal(2, DiceRollLogic.extractModifierFromRoll("2d10+5-3"))
+    end)
+
+    it("does not read a dice group count as a modifier", function()
+        -- "+2" belongs to "+2d6" here; only "+3" is a modifier.
+        assert.are.equal(3, DiceRollLogic.extractModifierFromRoll("1d10+2d6+3"))
+        assert.are.equal(0, DiceRollLogic.extractModifierFromRoll("1d10+2d6"))
+        assert.are.equal(-1, DiceRollLogic.extractModifierFromRoll("2d6+1d10-1"))
+    end)
+
+    it("sums all modifiers when multiple signs exist", function()
+        -- Previously only the first sign+num pattern was matched (+3);
+        -- multi-term expressions now sum correctly: +3-1 = 2.
         local result = DiceRollLogic.extractModifierFromRoll("2d10+3-1")
-        -- Should match the first sign+num pattern: +3
-        assert.are.equal(3, result)
+        assert.are.equal(2, result)
     end)
 end)
 
@@ -1220,6 +1233,22 @@ describe("extractExpectedDiceList", function()
         assert.is_nil(DiceRollLogic.extractExpectedDiceList("1d100"))
     end)
 
+    it("falls back to textual stripping when ParseRoll throws", function()
+        dmhub.ParseRoll = function() error("engine parse error") end
+        dmhub.RollToString = function() return "should not be reached" end
+        local result = DiceRollLogic.extractExpectedDiceList("2d10 1 edge")
+        dmhub.RollToString = nil
+        assert.are.same({10, 10}, result)
+    end)
+
+    it("falls back to textual stripping when RollToString returns a non-string", function()
+        dmhub.ParseRoll = function() return {boons = 1, banes = 0} end
+        dmhub.RollToString = function() return {} end
+        local result = DiceRollLogic.extractExpectedDiceList("2d10 1 edge")
+        dmhub.RollToString = nil
+        assert.are.same({10, 10}, result)
+    end)
+
     it("returns nil for expressions with no dice", function()
         assert.is_nil(DiceRollLogic.extractExpectedDiceList("5"))
     end)
@@ -1284,6 +1313,33 @@ describe("buildForcedDice", function()
         assert.are.equal("out-of-range", reason)
     end)
 
+    it("returns out-of-range for a fractional value", function()
+        -- Engine behavior for non-integer results is undefined; refuse.
+        local forced, reason = DiceRollLogic.buildForcedDice(
+            {{type = "d6", value = 2.5}},
+            {6})
+        assert.is_nil(forced)
+        assert.are.equal("out-of-range", reason)
+    end)
+
+    it("returns type-mismatch for an unrecognized die type", function()
+        -- getDiceFaces defaults unknown types to 10; buildForcedDice must
+        -- NOT, or garbage entries would force d10 slots.
+        local forced, reason = DiceRollLogic.buildForcedDice(
+            {{type = "unknown", value = 5}},
+            {10})
+        assert.is_nil(forced)
+        assert.are.equal("type-mismatch", reason)
+    end)
+
+    it("returns type-mismatch for a non-string die type", function()
+        local forced, reason = DiceRollLogic.buildForcedDice(
+            {{type = nil, value = 5}},
+            {10})
+        assert.is_nil(forced)
+        assert.are.equal("type-mismatch", reason)
+    end)
+
     it("returns missing-input for nil arguments", function()
         local forced, reason = DiceRollLogic.buildForcedDice(nil, {10})
         assert.is_nil(forced)
@@ -1291,5 +1347,59 @@ describe("buildForcedDice", function()
         forced, reason = DiceRollLogic.buildForcedDice({}, nil)
         assert.is_nil(forced)
         assert.are.equal("missing-input", reason)
+    end)
+end)
+
+describe("forcedDiceHonored", function()
+    local FORCED = {{numFaces = 10, result = 7}, {numFaces = 10, result = 3}}
+
+    it("returns true when every forced entry appears in the rolled dice", function()
+        assert.is_true(DiceRollLogic.forcedDiceHonored(
+            { rolls = {
+                { result = 7, numFaces = 10 },
+                { result = 3, numFaces = 10 },
+            }},
+            FORCED))
+    end)
+
+    it("returns true on a subset match with extra rolled dice", function()
+        -- Game-system mechanics may add dice beyond the forced ones.
+        assert.is_true(DiceRollLogic.forcedDiceHonored(
+            { rolls = {
+                { result = 7, numFaces = 10 },
+                { result = 2, numFaces = 4 },
+                { result = 3, numFaces = 10 },
+            }},
+            FORCED))
+    end)
+
+    it("returns false when a forced value was not rolled", function()
+        assert.is_false(DiceRollLogic.forcedDiceHonored(
+            { rolls = {
+                { result = 2, numFaces = 10 },
+                { result = 9, numFaces = 10 },
+            }},
+            FORCED))
+    end)
+
+    it("does not reuse one rolled die for two forced duplicates", function()
+        assert.is_false(DiceRollLogic.forcedDiceHonored(
+            { rolls = {
+                { result = 7, numFaces = 10 },
+                { result = 2, numFaces = 10 },
+            }},
+            {{numFaces = 10, result = 7}, {numFaces = 10, result = 7}}))
+    end)
+
+    it("returns nil when rollInfo has no readable rolls", function()
+        assert.is_nil(DiceRollLogic.forcedDiceHonored({}, FORCED))
+        assert.is_nil(DiceRollLogic.forcedDiceHonored({ rolls = {} }, FORCED))
+        assert.is_nil(DiceRollLogic.forcedDiceHonored(nil, FORCED))
+    end)
+
+    it("returns nil for a missing or empty forcedDice table", function()
+        local info = { rolls = {{ result = 7, numFaces = 10 }} }
+        assert.is_nil(DiceRollLogic.forcedDiceHonored(info, nil))
+        assert.is_nil(DiceRollLogic.forcedDiceHonored(info, {}))
     end)
 end)

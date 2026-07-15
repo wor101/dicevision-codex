@@ -35,6 +35,11 @@ DiceVision = {
     -- until that build ships to users; support cannot be feature-detected
     -- from Lua. In-memory only, like mode/rules (dmhub.SetSettingValue is
     -- the option if persistence is ever wanted).
+    -- TODO(forcedDice-ship): once the forcedDice-capable build is the
+    -- shipped norm, revisit this default and the transitional wording in:
+    -- setUseForcedDice chat text, the /dv help text, the DVDicePanel
+    -- settings section, CLAUDE.md (Architecture + Commands), and the
+    -- HANDOFF.md forcedDice section.
     useForcedDice = false,
     forcedDiceChatCard = false,  -- custom chat card off by default on the forcedDice path
 
@@ -629,8 +634,27 @@ end
 -- boons/banes, tier shifts, and nat detection natively -- no collapsing to
 -- a numeric literal, no boons/banes splitting, no overrideTier injection.
 -- Returns true if it handled the roll; false means the caller must fall
--- through to the legacy collapse path (a roll is never lost).
-local function tryForcedDicePath(pendingRoll, rollData, diceForMessage)
+-- through to the legacy collapse path.
+--
+-- Failure contract: every failure DETECTED here (unparseable expression,
+-- count/type mismatch, out-of-range value) returns false so the legacy path
+-- takes over. The one failure the mod cannot detect up front is a Codex
+-- build without forcedDice support: the engine silently ignores the field
+-- and rolls VIRTUAL dice, discarding the physical values. The complete
+-- wrapper below verifies the rolled faces post-roll and auto-disables the
+-- toggle with a loud chat warning on a confirmed mismatch, so at most the
+-- first roll after enabling is affected.
+-- User-facing wording for buildForcedDice refusal reasons. These are
+-- actionable (the player rolled the wrong physical dice), so the fallback
+-- is announced in chat rather than only in the debug console.
+local FORCED_DICE_REASON_TEXT = {
+    ["count-mismatch"] = "wrong number of dice",
+    ["type-mismatch"] = "wrong die types",
+    ["out-of-range"] = "a die value out of range",
+    ["missing-input"] = "missing dice data",
+}
+
+local function tryForcedDicePath(pendingRoll, rollData, diceForMessage, diceSum)
     local rollStr = pendingRoll.originalRoll
     local rollArgs = pendingRoll.rollArgs
     local creature = rollArgs and rollArgs.creature
@@ -638,6 +662,7 @@ local function tryForcedDicePath(pendingRoll, rollData, diceForMessage)
     if not expected then
         print(string.format("DV: forcedDice - cannot extract dice from '%s'; using legacy path",
             tostring(rollStr)))
+        chat.Send("[DiceVision] Cannot read the dice in this roll; using the legacy result")
         return false
     end
 
@@ -655,20 +680,21 @@ local function tryForcedDicePath(pendingRoll, rollData, diceForMessage)
     local forcedDice, reason = DiceRollLogic.buildForcedDice(processed, expected)
     if not forcedDice then
         print(string.format("DV: forcedDice - %s; using legacy path", tostring(reason)))
+        chat.Send(string.format("[DiceVision] Physical dice do not match the roll (%s); using the legacy result",
+            FORCED_DICE_REASON_TEXT[reason] or tostring(reason)))
         return false
     end
 
     -- Optional chat card (off by default on this path: the engine's native
-    -- roll message now shows the real dice). The card documents what the
-    -- camera read -- natural dice plus the static modifier -- while the
+    -- roll message shows the real dice). The card documents what the camera
+    -- read -- the rule-processed dice plus the static modifier -- so its
+    -- total is computed from diceSum, the same pipeline that produced the
+    -- displayed dice (dropped dice excluded, matching the visuals). The
     -- engine message remains the authoritative result including boons.
     local visualMessage = nil
     if DiceVision.forcedDiceChatCard then
         local modifier = DiceRollLogic.extractModifierFromRoll(rollStr)
-        local cardTotal = modifier
-        for _, entry in ipairs(forcedDice) do
-            cardTotal = cardTotal + entry.result
-        end
+        local cardTotal = (diceSum or 0) + modifier
         local tokenid = rollArgs and rollArgs.tokenid
         if not tokenid and creature then
             tokenid = dmhub.LookupTokenId(creature)
@@ -685,15 +711,25 @@ local function tryForcedDicePath(pendingRoll, rollData, diceForMessage)
     end
 
     -- Re-roll: amend the ORIGINAL expression with forcedDice as extraFields.
-    -- doRerollAmend merges them into amendArgs engine-side.
+    -- doRerollAmend (dialog Lua in DSRollDialog.lua / EmbeddedRollDialog.lua)
+    -- merges them into amendArgs before Amend(); requires a dialog version
+    -- whose doRerollAmend accepts extraFields. No post-roll verification is
+    -- possible here (the dialog owns the amend's complete callback), but a
+    -- reroll can only follow an initial roll, whose verification below
+    -- already auto-disables the toggle on an unsupported build.
     if pendingRoll.isReroll and pendingRoll.amendWithResult then
         if pendingRoll.setActiveRoll and pendingRoll.activeRoll then
             pendingRoll.setActiveRoll(pendingRoll.activeRoll)
-        end
-        if visualMessage then
-            chat.SendCustom(visualMessage)
+        elseif pendingRoll.setActiveRoll or pendingRoll.activeRoll then
+            print("DV: forcedDice - reroll missing setActiveRoll or activeRoll; amend may target a stale roll")
         end
         pendingRoll.amendWithResult(rollStr, { forcedDice = forcedDice })
+        -- Card only after the amend went through: a failed amend must not
+        -- leave a DiceVision card asserting a result the engine never
+        -- recorded. The card is cosmetic; never let it break the roll.
+        if visualMessage then
+            pcall(chat.SendCustom, visualMessage)
+        end
         return true
     end
 
@@ -701,9 +737,10 @@ local function tryForcedDicePath(pendingRoll, rollData, diceForMessage)
         return false
     end
 
-    -- Same shallow-copy discipline as the legacy path: isolate our mutations
-    -- from the g_activeRollArgs reference Codex holds, and do NOT copy
-    -- properties (registered game type; copying strips its metamethods).
+    -- Same shallow-copy discipline as the legacy path (see the longer note
+    -- there): copy the TOP LEVEL only, so `properties` rides along as the
+    -- same reference -- never clone the properties table itself (registered
+    -- game type; a clone strips its try_get metamethods).
     local copy = {}
     for k, v in pairs(rollArgs) do copy[k] = v end
     copy.roll = rollStr
@@ -714,13 +751,23 @@ local function tryForcedDicePath(pendingRoll, rollData, diceForMessage)
     -- tumbling to the physical faces is the intended UX; if the tumble
     -- delay proves annoying, `copy.instant = true` is the one-line change.
 
-    if visualMessage then
-        local originalComplete = rollArgs.complete
-        copy.complete = function(rollInfo)
-            chat.SendCustom(visualMessage)
-            if originalComplete then
-                originalComplete(rollInfo)
-            end
+    -- Always wrap complete: it is the only place the mod can verify the
+    -- engine honored forcedDice (an unsupported build silently ignores the
+    -- field and rolls virtual dice). On a confirmed mismatch, warn loudly
+    -- and auto-disable so subsequent rolls (and rerolls) use the legacy
+    -- path. The card send is pcall'd and precedes originalComplete so a
+    -- cosmetic failure can never block Codex's own completion logic.
+    local originalComplete = rollArgs.complete
+    copy.complete = function(rollInfo)
+        if DiceRollLogic.forcedDiceHonored(rollInfo, forcedDice) == false then
+            DiceVision.useForcedDice = false
+            chat.Send("[DiceVision] WARNING: this Codex build ignored forcedDice - the roll used VIRTUAL dice, not your physical values. forcedDice disabled; update Codex and re-enable with /dv forceddice on.")
+        end
+        if visualMessage then
+            pcall(chat.SendCustom, visualMessage)
+        end
+        if originalComplete then
+            originalComplete(rollInfo)
         end
     end
 
@@ -728,6 +775,8 @@ local function tryForcedDicePath(pendingRoll, rollData, diceForMessage)
     -- Wire the dialog's g_activeRoll or re-rolls silently break.
     if pendingRoll.setActiveRoll and roll then
         pendingRoll.setActiveRoll(roll)
+    elseif not roll then
+        print("DV: forcedDice - dmhub.Roll returned nil; re-rolls may not amend correctly")
     end
     return true
 end
@@ -784,11 +833,17 @@ handlePendingRoll = function(rollData)
     end
 
     -- forcedDice path: engine computes boons/banes/tier/nats natively from
-    -- the intact expression. Falls through to the legacy collapse path on
-    -- any failure so a roll is never lost.
+    -- the intact expression. Any detected failure -- including an uncaught
+    -- error, hence the pcall -- falls through to the legacy collapse path so
+    -- a roll is never lost. Without the pcall, an error escaping here would
+    -- also strand isPolling=true and wedge every subsequent roll.
     if DiceVision.useForcedDice then
-        if tryForcedDicePath(pendingRoll, rollData, diceForMessage) then
+        local ok, handled = pcall(tryForcedDicePath, pendingRoll, rollData, diceForMessage, diceSum)
+        if ok and handled then
             return true
+        end
+        if not ok then
+            print("DV: forcedDice - error: " .. tostring(handled) .. "; using legacy path")
         end
     end
 
@@ -1192,7 +1247,7 @@ end
 DiceVision.setUseForcedDice = function(enabled)
     DiceVision.useForcedDice = enabled and true or false
     if DiceVision.useForcedDice then
-        chat.Send("[DiceVision] forcedDice enabled (requires a Codex build with dmhub.Roll forcedDice support; falls back to legacy per-roll on failure)")
+        chat.Send("[DiceVision] forcedDice enabled. Requires a Codex build with dmhub.Roll forcedDice support: an older build silently rolls VIRTUAL dice instead. DiceVision verifies each roll and auto-disables with a warning if that happens.")
     else
         chat.Send("[DiceVision] forcedDice disabled (legacy deterministic-total path)")
     end

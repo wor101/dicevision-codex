@@ -268,11 +268,14 @@ dmhub.Roll{
 ```
 - `DiceRollLogic.extractExpectedDiceList(rollStr, creature)` computes the ordered face-count list the expression expects (engine `ParseRoll`/`RollToString` round-trip to strip boons, textual fallback otherwise). Supported dice: d4/d6/d8/d10/d12/d20 (d100 -> legacy fallback).
 - Clamp + value-mapping rules still apply to the physical dice (d10 0 -> 10, camera misreads). Keep-selection is NOT applied unless the user rolled more dice than expected and an explicit keep rule exists.
+- Known limitation: the clamp rule is d10-centric by definition (values outside 0-10 -> 1), so with clamp enabled a legitimate d20/d12 result above 10 is clamped to 1 and forced as such. Keep clamp off when rolling non-d10 dice. (Characterization test pins this.)
+- Detected fallbacks are announced in chat (`Physical dice do not match the roll (<reason>)`), not just the debug console, since count/type/range mismatches are player-actionable.
 - `DiceRollLogic.buildForcedDice(dice, expectedFaces)` matches physical dice to expected faces by type; refuses on count-mismatch / type-mismatch / out-of-range (never partial-force).
 - Deliberately NOT done on this path (all legacy-only workarounds for the collapsed literal): boons/banes field splitting, `multitargets[1]` zeroing, `instant = true`, `overrideTier` injection.
-- Re-rolls: `amendWithResult(originalRoll, { forcedDice = forcedDice })` - `doRerollAmend` merges extraFields into amendArgs engine-side.
+- Re-rolls: `amendWithResult(originalRoll, { forcedDice = forcedDice })` - `doRerollAmend` (dialog Lua in DSRollDialog.lua / EmbeddedRollDialog.lua) merges extraFields into amendArgs before `Amend()`; requires a dialog version whose `doRerollAmend` accepts extraFields.
 - The custom DiceVisionRollMessage chat card is OFF by default here (engine message shows real dice); `/dv forceddice card on` re-enables it. The card documents what the camera read (natural dice + static modifier); the engine message is the authoritative result including boons.
-- **Any failure falls through to the legacy path below - a roll is never lost.** forcedDice support cannot be feature-detected from Lua, hence the manual toggle.
+- **Any failure the mod can detect falls through to the legacy path below.** The exception is a Codex build without forcedDice support: it cannot be feature-detected from Lua (hence the manual toggle), and the engine silently ignores the field and rolls VIRTUAL dice, discarding the physical values. Mitigation: the roll's `complete` wrapper verifies `rollInfo.rolls` against the forced values (`DiceRollLogic.forcedDiceHonored`) and on a confirmed mismatch auto-disables `useForcedDice` with a loud chat warning, so at most the first roll after enabling is affected. Rerolls have no verification hook (the dialog owns the amend's complete), but a reroll can only follow an initial roll that already verified.
+- An uncaught Lua error inside `tryForcedDicePath` is caught by a `pcall` at the fork in `handlePendingRoll` and falls through to legacy; without it the error would strand `isPolling=true` and wedge all subsequent rolls.
 
 **Legacy collapse path (default) - two code paths based on targeting:**
 
