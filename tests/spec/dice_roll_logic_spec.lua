@@ -1163,3 +1163,133 @@ describe("detectPercentilePair", function()
         assert.are.equal(9, result.total)
     end)
 end)
+
+-- ============================================================================
+-- Forced Dice (engine forcedDice support)
+-- ============================================================================
+
+describe("extractExpectedDiceList", function()
+    before_each(function()
+        resetStubs()
+    end)
+
+    it("extracts dice from a simple expression", function()
+        assert.are.same({10, 10}, DiceRollLogic.extractExpectedDiceList("2d10+3"))
+    end)
+
+    it("extracts a single die with implicit count", function()
+        assert.are.same({20}, DiceRollLogic.extractExpectedDiceList("d20"))
+    end)
+
+    it("strips edges textually when engine round-trip is unavailable", function()
+        -- Default stubs: ParseRoll returns nil, RollToString undefined.
+        assert.are.same({10, 10}, DiceRollLogic.extractExpectedDiceList("2d10 1 edge"))
+        assert.are.same({10, 10}, DiceRollLogic.extractExpectedDiceList("2d10 2 banes"))
+    end)
+
+    it("flattens keep expressions to the full dice count", function()
+        -- Engine keep semantics run against the forced faces, so all
+        -- physical dice must be supplied.
+        assert.are.same({10, 10, 10}, DiceRollLogic.extractExpectedDiceList("3d10 keep 2"))
+    end)
+
+    it("handles mixed dice groups in order", function()
+        assert.are.same({6, 6, 10}, DiceRollLogic.extractExpectedDiceList("2d6+1d10"))
+    end)
+
+    it("uses the engine round-trip and nils boons/banes when available", function()
+        local parseArgs, toStringArg
+        dmhub.ParseRoll = function(rollStr, creature)
+            parseArgs = {rollStr = rollStr, creature = creature}
+            return {boons = 1, banes = 0, categories = {}}
+        end
+        dmhub.RollToString = function(parsed)
+            toStringArg = parsed
+            return "2d10"
+        end
+        local result = DiceRollLogic.extractExpectedDiceList("2d10 1 edge", "creature-1")
+        dmhub.RollToString = nil
+        assert.are.same({10, 10}, result)
+        assert.are.equal("2d10 1 edge", parseArgs.rollStr)
+        assert.are.equal("creature-1", parseArgs.creature)
+        assert.is_nil(toStringArg.boons)
+        assert.is_nil(toStringArg.banes)
+    end)
+
+    it("returns nil for unsupported dice (d100)", function()
+        assert.is_nil(DiceRollLogic.extractExpectedDiceList("1d100"))
+    end)
+
+    it("returns nil for expressions with no dice", function()
+        assert.is_nil(DiceRollLogic.extractExpectedDiceList("5"))
+    end)
+
+    it("returns nil for non-string input", function()
+        assert.is_nil(DiceRollLogic.extractExpectedDiceList(nil))
+        assert.is_nil(DiceRollLogic.extractExpectedDiceList(15))
+    end)
+end)
+
+describe("buildForcedDice", function()
+    it("builds entries in expression order", function()
+        local forced = DiceRollLogic.buildForcedDice(
+            {{type = "d10", value = 7}, {type = "d10", value = 3}},
+            {10, 10})
+        assert.are.same({{numFaces = 10, result = 7}, {numFaces = 10, result = 3}}, forced)
+    end)
+
+    it("matches mixed faces by type regardless of arrival order", function()
+        local forced = DiceRollLogic.buildForcedDice(
+            {{type = "d6", value = 4}, {type = "d10", value = 9}},
+            {10, 6})
+        assert.are.same({{numFaces = 10, result = 9}, {numFaces = 6, result = 4}}, forced)
+    end)
+
+    it("accepts a d10 result of 10 (post 0->10 mapping)", function()
+        local forced = DiceRollLogic.buildForcedDice(
+            {{type = "d10", value = 10}},
+            {10})
+        assert.are.same({{numFaces = 10, result = 10}}, forced)
+    end)
+
+    it("returns count-mismatch when dice counts differ", function()
+        local forced, reason = DiceRollLogic.buildForcedDice(
+            {{type = "d10", value = 7}},
+            {10, 10})
+        assert.is_nil(forced)
+        assert.are.equal("count-mismatch", reason)
+    end)
+
+    it("returns type-mismatch when a die type is missing", function()
+        local forced, reason = DiceRollLogic.buildForcedDice(
+            {{type = "d10", value = 7}, {type = "d10", value = 3}},
+            {10, 6})
+        assert.is_nil(forced)
+        assert.are.equal("type-mismatch", reason)
+    end)
+
+    it("returns out-of-range for an unmapped d10 zero", function()
+        local forced, reason = DiceRollLogic.buildForcedDice(
+            {{type = "d10", value = 0}},
+            {10})
+        assert.is_nil(forced)
+        assert.are.equal("out-of-range", reason)
+    end)
+
+    it("returns out-of-range for a value above the face count", function()
+        local forced, reason = DiceRollLogic.buildForcedDice(
+            {{type = "d6", value = 7}},
+            {6})
+        assert.is_nil(forced)
+        assert.are.equal("out-of-range", reason)
+    end)
+
+    it("returns missing-input for nil arguments", function()
+        local forced, reason = DiceRollLogic.buildForcedDice(nil, {10})
+        assert.is_nil(forced)
+        assert.are.equal("missing-input", reason)
+        forced, reason = DiceRollLogic.buildForcedDice({}, nil)
+        assert.is_nil(forced)
+        assert.are.equal("missing-input", reason)
+    end)
+end)

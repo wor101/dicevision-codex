@@ -416,6 +416,8 @@ CreateDiceVisionPanel = function()
         local addStatus
         local testing = false
         local clampBtn, clampLabel
+        local forcedBtn, forcedLabel
+        local cardBtn, cardLabel
         local autoBtn, highBtn, lowBtn, countInput
         local mappingRows
         local addDie, addFrom, addTo
@@ -458,6 +460,15 @@ CreateDiceVisionPanel = function()
             clampBtn:SetClass("selected", on)
         end
 
+        local function refreshForcedDice()
+            local on = DiceVision.useForcedDice
+            forcedLabel.text = on and "On" or "Off"
+            forcedBtn:SetClass("selected", on)
+            local card = DiceVision.forcedDiceChatCard
+            cardLabel.text = card and "On" or "Off"
+            cardBtn:SetClass("selected", card)
+        end
+
         local function refreshKeep()
             local sel = DiceVision.rules.diceSelection
             local mode = sel and sel.keep or "auto"
@@ -473,6 +484,7 @@ CreateDiceVisionPanel = function()
         -- declared upvalue, assigned below before this is ever called).
         local function refreshAllRules()
             refreshClamp()
+            refreshForcedDice()
             refreshKeep()
             rebuildMappingRows()
         end
@@ -540,6 +552,32 @@ CreateDiceVisionPanel = function()
                 refreshClamp()
             end,
             clampLabel,
+        }
+
+        forcedLabel = gui.Label{
+            interactable = false, width = 28, height = "auto",
+            halign = "center", valign = "center", color = "white", fontSize = 11, text = "Off",
+        }
+        forcedBtn = gui.Panel{
+            classes = "dvSetBtn",
+            click = function()
+                DiceVision.setUseForcedDice(not DiceVision.useForcedDice)
+                refreshForcedDice()
+            end,
+            forcedLabel,
+        }
+
+        cardLabel = gui.Label{
+            interactable = false, width = 28, height = "auto",
+            halign = "center", valign = "center", color = "white", fontSize = 11, text = "Off",
+        }
+        cardBtn = gui.Panel{
+            classes = "dvSetBtn",
+            click = function()
+                DiceVision.setForcedDiceChatCard(not DiceVision.forcedDiceChatCard)
+                refreshForcedDice()
+            end,
+            cardLabel,
         }
 
         countInput = gui.Input{
@@ -643,6 +681,19 @@ CreateDiceVisionPanel = function()
             },
             testLine,
 
+            -- Forced dice (engine forcedDice support; needs a new Codex build)
+            gui.Label{ classes = "dvSetHeader", text = "Forced Dice" },
+            gui.Panel{
+                flow = "horizontal", width = "100%", height = "auto", valign = "center",
+                gui.Label{ classes = "dvSetInfo", width = "100%-60", height = "auto", text = "Use engine forcedDice" },
+                forcedBtn,
+            },
+            gui.Panel{
+                flow = "horizontal", width = "100%", height = "auto", valign = "center", tmargin = 4,
+                gui.Label{ classes = "dvSetInfo", width = "100%-60", height = "auto", text = "DiceVision chat card" },
+                cardBtn,
+            },
+
             -- Dice rules
             gui.Label{ classes = "dvSetHeader", text = "Dice Rules" },
             gui.Panel{
@@ -678,6 +729,7 @@ CreateDiceVisionPanel = function()
         -- Initial paint from current state.
         refreshStatus()
         refreshClamp()
+        refreshForcedDice()
         refreshKeep()
         if DiceVision.rules.diceSelection then
             countInput.text = tostring(DiceVision.rules.diceSelection.count)

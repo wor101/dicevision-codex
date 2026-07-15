@@ -3315,4 +3315,355 @@ describe("DiceVision", function()
             end
         end)
     end)
+
+    -- ============================================================================
+    -- forcedDice path (engine forcedDice support behind DiceVision.useForcedDice)
+    -- ============================================================================
+
+    describe("forcedDice path", function()
+        -- Drives a physical-dice delivery through the same polling seam the
+        -- other handlePendingRoll suites use.
+        local function deliverRoll(rollData)
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+        end
+
+        local function setupReplaceMode()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            DiceVision.useForcedDice = true
+        end
+
+        it("passes the intact expression and forcedDice to dmhub.Roll", function()
+            setupReplaceMode()
+            local setActiveRollCalled = false
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Forced Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() setActiveRollCalled = true end,
+            }
+            DiceVision.waitingForRoll = true
+
+            -- Second die reads 0: the default d10 0->10 mapping must apply
+            -- before the forcedDice table is built.
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 0 },
+                },
+                total = 7,
+            })
+
+            assert.are.equal(1, #_G._dmhubRollLog)
+            local logged = _G._dmhubRollLog[1]
+            assert.are.equal("2d10+5", logged.roll)
+            assert.are.same(
+                {{numFaces = 10, result = 7}, {numFaces = 10, result = 10}},
+                logged.forcedDice)
+            -- Engine owns boons/banes and pacing on this path.
+            assert.is_nil(logged.boons)
+            assert.is_nil(logged.banes)
+            assert.is_nil(logged.instant)
+            assert.is_true(setActiveRollCalled)
+        end)
+
+        it("does not zero multitargets boons on targeted rolls", function()
+            setupReplaceMode()
+            local multitargets = {{ boons = 1, banes = 0 }}
+            local props = {
+                multitargets = multitargets,
+                try_get = function(self, key) return rawget(self, key) end,
+            }
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil, properties = props },
+                originalRoll = "2d10+5",
+                description = "Targeted Forced Test",
+                edges = 1,
+                banes = 0,
+                multitargets = multitargets,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            })
+
+            local logged = _G._dmhubRollLog[1]
+            assert.are.equal("2d10+5", logged.roll)
+            -- Legacy zeroed multitargets[1] to avoid double-counting a
+            -- collapsed literal; with the expression intact the engine owns
+            -- the boon math and the mod must not touch it.
+            assert.are.equal(1, multitargets[1].boons)
+            assert.is_nil(logged.boons)
+        end)
+
+        it("suppresses the DiceVision chat card by default", function()
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "No Card Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            })
+
+            for _, entry in ipairs(_G._chatLog) do
+                assert.are_not.equal("custom", entry.type)
+            end
+            -- No complete wrapper installed when the card is off and the
+            -- original rollArgs had none.
+            assert.is_nil(_G._dmhubRollLog[1].complete)
+        end)
+
+        it("sends the chat card from the complete wrapper when enabled", function()
+            setupReplaceMode()
+            DiceVision.forcedDiceChatCard = true
+            local originalCompleteCalled = false
+            DiceVision.pendingRoll = {
+                rollArgs = {
+                    roll = "2d10+5",
+                    creature = nil,
+                    complete = function() originalCompleteCalled = true end,
+                },
+                originalRoll = "2d10+5",
+                description = "Card Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 0 },
+                },
+                total = 7,
+            })
+
+            local logged = _G._dmhubRollLog[1]
+            assert.is_function(logged.complete)
+
+            -- Card only sends once the engine reports the roll complete.
+            local customBefore = 0
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "custom" then customBefore = customBefore + 1 end
+            end
+            assert.are.equal(0, customBefore)
+
+            logged.complete({})
+
+            local card = nil
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "custom" then card = entry.message end
+            end
+            assert.is_not_nil(card)
+            -- Card documents what the camera read: 7 + (0->10) + 5 = 22, T3.
+            assert.are.equal(22, card.total)
+            assert.are.equal(3, card.tier)
+            assert.is_true(originalCompleteCalled)
+        end)
+
+        it("amends re-rolls with the original expression and forcedDice extraFields", function()
+            setupReplaceMode()
+            local amendFormula, amendExtra
+            local props = {
+                try_get = function(self, key) return rawget(self, key) end,
+            }
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil, properties = props },
+                originalRoll = "2d10+5",
+                description = "Forced Re-roll",
+                edges = 2,
+                banes = 0,
+                isReroll = true,
+                amendWithResult = function(formula, extra)
+                    amendFormula = formula
+                    amendExtra = extra
+                end,
+                activeRoll = { id = "roll-1" },
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            })
+
+            assert.are.equal("2d10+5", amendFormula)
+            assert.is_not_nil(amendExtra)
+            assert.are.same(
+                {{numFaces = 10, result = 7}, {numFaces = 10, result = 3}},
+                amendExtra.forcedDice)
+            -- Tier shift is the engine's job now: no overrideTier write even
+            -- for net +2 edges (legacy wrote 3 here).
+            assert.is_nil(props.overrideTier)
+            assert.are.equal(0, #_G._dmhubRollLog)
+        end)
+
+        it("falls back to the legacy path on dice-count mismatch", function()
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10", creature = nil },
+                originalRoll = "2d10",
+                description = "Mismatch Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            -- Three physical dice for a 2d10 expression with no keep rule.
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                    { type = "d10", value = 5 },
+                },
+                total = 15,
+            })
+
+            local logged = _G._dmhubRollLog[1]
+            assert.is_not_nil(logged)
+            -- Legacy collapse: deterministic literal, instant, no forcedDice.
+            assert.are.equal("15", logged.roll)
+            assert.is_true(logged.instant)
+            assert.is_nil(logged.forcedDice)
+        end)
+
+        it("falls back to the legacy path for unsupported dice", function()
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "1d100", creature = nil },
+                originalRoll = "1d100",
+                description = "Percentile Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                },
+                total = 7,
+            })
+
+            local logged = _G._dmhubRollLog[1]
+            assert.is_not_nil(logged)
+            assert.is_nil(logged.forcedDice)
+            assert.is_true(logged.instant)
+        end)
+
+        it("uses the legacy path when the toggle is off", function()
+            setupReplaceMode()
+            DiceVision.useForcedDice = false
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Toggle Off Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            })
+
+            local logged = _G._dmhubRollLog[1]
+            assert.are.equal("15", logged.roll)
+            assert.is_true(logged.instant)
+            assert.is_nil(logged.forcedDice)
+        end)
+    end)
+
+    -- ============================================================================
+    -- /dv forceddice command and status
+    -- ============================================================================
+
+    describe("/dv forceddice command", function()
+        it("enables forcedDice with on", function()
+            Commands.dv("forceddice on")
+            assert.is_true(DiceVision.useForcedDice)
+            assert.is_true(chatHas("forcedDice enabled"))
+        end)
+
+        it("disables forcedDice with off", function()
+            DiceVision.useForcedDice = true
+            Commands.dv("forceddice off")
+            assert.is_false(DiceVision.useForcedDice)
+            assert.is_true(chatHas("forcedDice disabled"))
+        end)
+
+        it("enables the chat card with card on", function()
+            Commands.dv("forceddice card on")
+            assert.is_true(DiceVision.forcedDiceChatCard)
+            assert.is_true(chatHas("chat card enabled"))
+        end)
+
+        it("disables the chat card with card off", function()
+            DiceVision.forcedDiceChatCard = true
+            Commands.dv("forceddice card off")
+            assert.is_false(DiceVision.forcedDiceChatCard)
+            assert.is_true(chatHas("chat card disabled"))
+        end)
+
+        it("shows usage for card without on/off", function()
+            Commands.dv("forceddice card")
+            assert.is_true(chatHas("/dv forceddice card <on|off>"))
+        end)
+
+        it("shows current state and usage with no argument", function()
+            Commands.dv("forceddice")
+            assert.is_true(chatHas("forcedDice: off"))
+            assert.is_true(chatHas("/dv forceddice <on|off>"))
+        end)
+
+        it("reports state through getStatus and /dv status", function()
+            DiceVision.useForcedDice = true
+            local s = DiceVision.getStatus()
+            assert.is_true(s.useForcedDice)
+            assert.is_false(s.forcedDiceChatCard)
+
+            Commands.dv("status")
+            assert.is_true(chatHas("ForcedDice: on (chat card: off)"))
+        end)
+    end)
 end)

@@ -20,7 +20,9 @@ This repository contains a mod that integrates physical dice recognition (DiceVi
 1. User clicks "Roll Dice" in Codex
 2. `RollDialog.OnBeforeRoll` callback intercepts (if DiceVision connected in replace mode)
 3. DiceVision waits for physical dice from API
-4. `handlePendingRoll()` processes result and calls `dmhub.Roll()` with deterministic total
+4. `handlePendingRoll()` processes result and calls `dmhub.Roll()` via one of two paths:
+   - **forcedDice path** (`/dv forceddice on`, requires a Codex build where `dmhub.Roll` accepts a `forcedDice` table): passes the intact roll expression plus `forcedDice = {{numFaces, result}, ...}`; the engine computes boons/banes/tier/nats natively. Falls back to legacy per-roll on any failure (unparseable expression, dice-count mismatch, out-of-range value).
+   - **Legacy collapse path** (default): collapses the roll to a deterministic total, pre-computes edge/bane modifiers and tier-shift overrides.
 
 ## Draw Steel Edge/Bane Rules (Critical)
 
@@ -42,6 +44,8 @@ Edges and banes cancel 1-for-1. Apply rules based on net (edges - banes):
 - `/dv status` - Show connection status
 - `/dv mode <off|replace>` - Set operation mode
 - `/dv rules <subcommand>` - Configure dice processing rules (map, keep, clamp, clear)
+- `/dv forceddice <on|off>` - Use engine forcedDice (needs new Codex build; default off)
+- `/dv forceddice card <on|off>` - DiceVision chat card on the forcedDice path (default off)
 
 ## Coding Rules
 - **ASCII only in Lua files**: Never use non-ASCII / UTF-8 characters (e.g. `->`, `--`, curly quotes) anywhere in `.lua` source files — not in strings, comments, or identifiers. Codex's Lua parser cannot handle multi-byte characters and will fail with misleading syntax errors. Use ASCII equivalents instead (e.g. `->`, `--`, straight quotes).

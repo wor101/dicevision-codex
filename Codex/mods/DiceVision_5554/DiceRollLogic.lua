@@ -260,6 +260,96 @@ function DiceRollLogic.applyDiceRules(dice, pendingRoll)
 end
 
 -- ============================================================================
+-- Forced Dice (engine forcedDice support)
+-- ============================================================================
+
+-- Dice the engine can render/force. d100 is intentionally absent: the ability
+-- roll path never handled percentile, so a d100 expression falls back to the
+-- legacy collapse path.
+local SUPPORTED_FORCED_DICE = {
+    [4] = true, [6] = true, [8] = true, [10] = true, [12] = true, [20] = true,
+}
+
+--- Extract the ordered, flattened list of dice face counts a roll expression
+-- expects (e.g. "2d10+3 1 bane" -> {10, 10}). Used to build the forcedDice
+-- table passed to dmhub.Roll. Returns nil if the expression is unparseable
+-- or contains unsupported dice, signalling the caller to use the legacy path.
+-- Mirrors the official DicePanel.lua extractDiceList: prefer an engine
+-- ParseRoll/RollToString round-trip to strip boons/banes so the dice regex
+-- does not have to know about them; fall back to textual stripping when
+-- those APIs are unavailable.
+function DiceRollLogic.extractExpectedDiceList(rollStr, creature)
+    if type(rollStr) ~= "string" then
+        return nil
+    end
+    local cleanRoll = rollStr
+    if dmhub and dmhub.ParseRoll and dmhub.RollToString then
+        local parsed = dmhub.ParseRoll(rollStr, creature)
+        if parsed ~= nil then
+            parsed.boons = nil
+            parsed.banes = nil
+            cleanRoll = dmhub.RollToString(parsed) or rollStr
+        end
+    else
+        cleanRoll = cleanRoll:gsub("%d+%s+edges?", ""):gsub("%d+%s+banes?", "")
+    end
+    local diceList = {}
+    for n, sides in string.gmatch(cleanRoll, "(%d*)[dD](%d+)") do
+        local faces = tonumber(sides)
+        if not SUPPORTED_FORCED_DICE[faces] then
+            return nil
+        end
+        for _ = 1, (tonumber(n) or 1) do
+            diceList[#diceList + 1] = faces
+        end
+    end
+    if #diceList == 0 then
+        return nil
+    end
+    return diceList
+end
+
+--- Build the forcedDice table for dmhub.Roll from physical dice.
+-- dice: physical dice AFTER clamp/value-mapping rules ({type, value} each).
+-- expectedFaces: array from extractExpectedDiceList.
+-- Each expected face count is matched to an unused physical die of the same
+-- face count (order-independent by type, first-come within a type).
+-- Returns forcedDice, nil on success or nil, reason on failure. Any failure
+-- means the caller should use the legacy path: never partial-force, since the
+-- engine would virtually roll unmatched dice, violating physical-dice intent.
+function DiceRollLogic.buildForcedDice(dice, expectedFaces)
+    if not dice or not expectedFaces then
+        return nil, "missing-input"
+    end
+    if #dice ~= #expectedFaces then
+        return nil, "count-mismatch"
+    end
+    local used = {}
+    local forced = {}
+    for _, faces in ipairs(expectedFaces) do
+        local found = nil
+        for i, die in ipairs(dice) do
+            if not used[i] and DiceRollLogic.getDiceFaces(die.type) == faces then
+                used[i] = true
+                found = die
+                break
+            end
+        end
+        if not found then
+            return nil, "type-mismatch"
+        end
+        -- Out-of-range values (e.g. an unmapped d10 "0" or a camera misread)
+        -- would be dropped engine-side with a warning; refuse instead so the
+        -- legacy path handles the roll deterministically.
+        if type(found.value) ~= "number" or found.value < 1 or found.value > faces then
+            return nil, "out-of-range"
+        end
+        forced[#forced + 1] = { numFaces = faces, result = found.value }
+    end
+    return forced
+end
+
+-- ============================================================================
 -- Percentile (d100) Detection
 -- ============================================================================
 

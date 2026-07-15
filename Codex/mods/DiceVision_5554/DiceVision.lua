@@ -30,6 +30,14 @@ DiceVision = {
     -- Request ID for polling
     currentRequestId = nil,
 
+    -- forcedDice engine feature (requires a Codex build where dmhub.Roll
+    -- accepts a forcedDice table). Legacy collapse path stays the default
+    -- until that build ships to users; support cannot be feature-detected
+    -- from Lua. In-memory only, like mode/rules (dmhub.SetSettingValue is
+    -- the option if persistence is ever wanted).
+    useForcedDice = false,
+    forcedDiceChatCard = false,  -- custom chat card off by default on the forcedDice path
+
     -- Panel-specific state (independent of replace mode)
     panelWaitingForRoll = false,
     panelPollStartTime = 0,
@@ -615,6 +623,115 @@ local function showWaitingDialog()
     chat.Send("[DiceVision] Waiting for physical dice roll...")
 end
 
+-- forcedDice path: hand the INTACT roll expression plus the physical dice
+-- faces to the engine via dmhub.Roll's forcedDice table. The virtual dice
+-- tumble and land showing the physical values, and the engine computes
+-- boons/banes, tier shifts, and nat detection natively -- no collapsing to
+-- a numeric literal, no boons/banes splitting, no overrideTier injection.
+-- Returns true if it handled the roll; false means the caller must fall
+-- through to the legacy collapse path (a roll is never lost).
+local function tryForcedDicePath(pendingRoll, rollData, diceForMessage)
+    local rollStr = pendingRoll.originalRoll
+    local rollArgs = pendingRoll.rollArgs
+    local creature = rollArgs and rollArgs.creature
+    local expected = DiceRollLogic.extractExpectedDiceList(rollStr, creature)
+    if not expected then
+        print(string.format("DV: forcedDice - cannot extract dice from '%s'; using legacy path",
+            tostring(rollStr)))
+        return false
+    end
+
+    -- Clamp and value mappings still apply (camera misreads, d10 0 -> 10).
+    -- Keep-selection is deliberately NOT applied in general: the expression's
+    -- own keep semantics run engine-side against the forced faces. Exception:
+    -- an explicit user keep rule may reconcile a surplus (user rolled more
+    -- dice than the expression needs).
+    local processed = DiceRollLogic.clampOutOfRangeValues(rollData.dice, DiceVision.rules.clampOutOfRange)
+    processed = DiceRollLogic.applyValueMappings(processed, DiceVision.rules.valueMappings)
+    if #processed > #expected and DiceVision.rules.diceSelection then
+        processed = DiceRollLogic.applyDiceSelection(processed, DiceVision.rules.diceSelection)
+    end
+
+    local forcedDice, reason = DiceRollLogic.buildForcedDice(processed, expected)
+    if not forcedDice then
+        print(string.format("DV: forcedDice - %s; using legacy path", tostring(reason)))
+        return false
+    end
+
+    -- Optional chat card (off by default on this path: the engine's native
+    -- roll message now shows the real dice). The card documents what the
+    -- camera read -- natural dice plus the static modifier -- while the
+    -- engine message remains the authoritative result including boons.
+    local visualMessage = nil
+    if DiceVision.forcedDiceChatCard then
+        local modifier = DiceRollLogic.extractModifierFromRoll(rollStr)
+        local cardTotal = modifier
+        for _, entry in ipairs(forcedDice) do
+            cardTotal = cardTotal + entry.result
+        end
+        local tokenid = rollArgs and rollArgs.tokenid
+        if not tokenid and creature then
+            tokenid = dmhub.LookupTokenId(creature)
+        end
+        visualMessage = DiceVisionRollMessage.new{
+            description = pendingRoll.description or "Physical Dice",
+            dice = diceForMessage,
+            modifier = modifier,
+            total = cardTotal,
+            tier = DiceRollLogic.calculateTier(cardTotal),
+            tokenid = tokenid,
+            rollSource = "ability",
+        }
+    end
+
+    -- Re-roll: amend the ORIGINAL expression with forcedDice as extraFields.
+    -- doRerollAmend merges them into amendArgs engine-side.
+    if pendingRoll.isReroll and pendingRoll.amendWithResult then
+        if pendingRoll.setActiveRoll and pendingRoll.activeRoll then
+            pendingRoll.setActiveRoll(pendingRoll.activeRoll)
+        end
+        if visualMessage then
+            chat.SendCustom(visualMessage)
+        end
+        pendingRoll.amendWithResult(rollStr, { forcedDice = forcedDice })
+        return true
+    end
+
+    if not rollArgs then
+        return false
+    end
+
+    -- Same shallow-copy discipline as the legacy path: isolate our mutations
+    -- from the g_activeRollArgs reference Codex holds, and do NOT copy
+    -- properties (registered game type; copying strips its metamethods).
+    local copy = {}
+    for k, v in pairs(rollArgs) do copy[k] = v end
+    copy.roll = rollStr
+    copy.forcedDice = forcedDice
+    -- Deliberately NOT set here (unlike legacy): boons/banes fields,
+    -- multitargets[1] zeroing, and instant=true. The engine and dialog own
+    -- them now, matching the official DicePanel.lua handlers. The dice
+    -- tumbling to the physical faces is the intended UX; if the tumble
+    -- delay proves annoying, `copy.instant = true` is the one-line change.
+
+    if visualMessage then
+        local originalComplete = rollArgs.complete
+        copy.complete = function(rollInfo)
+            chat.SendCustom(visualMessage)
+            if originalComplete then
+                originalComplete(rollInfo)
+            end
+        end
+    end
+
+    local roll = dmhub.Roll(copy)
+    -- Wire the dialog's g_activeRoll or re-rolls silently break.
+    if pendingRoll.setActiveRoll and roll then
+        pendingRoll.setActiveRoll(roll)
+    end
+    return true
+end
+
 handlePendingRoll = function(rollData)
     if not DiceVision.pendingRoll then
         return false
@@ -664,6 +781,15 @@ handlePendingRoll = function(rollData)
         chat.SendCustom(visualMessage)
         pendingRoll.completeWithResult(total)
         return true
+    end
+
+    -- forcedDice path: engine computes boons/banes/tier/nats natively from
+    -- the intact expression. Falls through to the legacy collapse path on
+    -- any failure so a roll is never lost.
+    if DiceVision.useForcedDice then
+        if tryForcedDicePath(pendingRoll, rollData, diceForMessage) then
+            return true
+        end
     end
 
     local edges = pendingRoll.edges or 0
@@ -1063,6 +1189,26 @@ DiceVision.setClampOutOfRange = function(enabled)
     return DiceVision.rules.clampOutOfRange
 end
 
+DiceVision.setUseForcedDice = function(enabled)
+    DiceVision.useForcedDice = enabled and true or false
+    if DiceVision.useForcedDice then
+        chat.Send("[DiceVision] forcedDice enabled (requires a Codex build with dmhub.Roll forcedDice support; falls back to legacy per-roll on failure)")
+    else
+        chat.Send("[DiceVision] forcedDice disabled (legacy deterministic-total path)")
+    end
+    return DiceVision.useForcedDice
+end
+
+DiceVision.setForcedDiceChatCard = function(enabled)
+    DiceVision.forcedDiceChatCard = enabled and true or false
+    if DiceVision.forcedDiceChatCard then
+        chat.Send("[DiceVision] forcedDice chat card enabled")
+    else
+        chat.Send("[DiceVision] forcedDice chat card disabled")
+    end
+    return DiceVision.forcedDiceChatCard
+end
+
 DiceVision.clearRules = function(clearAll)
     DiceVision.rules = {valueMappings = {}, diceSelection = nil, clampOutOfRange = false}
     if clearAll then
@@ -1129,6 +1275,8 @@ DiceVision.getStatus = function()
         sessionCode = DiceVision.sessionCode,
         mode = DiceVision.mode,
         isPolling = DiceVision.isPolling,
+        useForcedDice = DiceVision.useForcedDice,
+        forcedDiceChatCard = DiceVision.forcedDiceChatCard,
         hooks = hooks,
         missing = missing,
     }
@@ -1156,11 +1304,13 @@ Commands.dv = function(args)
         local s = DiceVision.getStatus()
         local function yn(v) return v and "YES" or "NO" end
         local status = string.format(
-            "[DiceVision] Status:\n  Connected: %s\n  Session: %s\n  Mode: %s\n  Polling: %s\n  Hooks: ability=%s, reroll=%s, table=%s",
+            "[DiceVision] Status:\n  Connected: %s\n  Session: %s\n  Mode: %s\n  Polling: %s\n  ForcedDice: %s (chat card: %s)\n  Hooks: ability=%s, reroll=%s, table=%s",
             tostring(s.connected),
             s.sessionCode or "none",
             s.mode,
             tostring(s.isPolling),
+            s.useForcedDice and "on" or "off",
+            s.forcedDiceChatCard and "on" or "off",
             yn(s.hooks.ability), yn(s.hooks.reroll), yn(s.hooks["table"])
         )
         if #s.missing > 0 then
@@ -1188,6 +1338,28 @@ Commands.dv = function(args)
             -- /dv connect.
             DiceVision.setMode(newMode, newMode == "replace")
             chat.Send("[DiceVision] Mode changed: " .. oldMode .. " -> " .. newMode)
+        end
+
+    elseif subcommand == "forceddice" then
+        local arg2 = parts[2]
+        if arg2 == "on" then
+            DiceVision.setUseForcedDice(true)
+        elseif arg2 == "off" then
+            DiceVision.setUseForcedDice(false)
+        elseif arg2 == "card" then
+            local arg3 = parts[3]
+            if arg3 == "on" then
+                DiceVision.setForcedDiceChatCard(true)
+            elseif arg3 == "off" then
+                DiceVision.setForcedDiceChatCard(false)
+            else
+                chat.Send("[DiceVision] Usage: /dv forceddice card <on|off>")
+            end
+        else
+            chat.Send(string.format(
+                "[DiceVision] forcedDice: %s (chat card: %s)\n  Usage: /dv forceddice <on|off>  |  /dv forceddice card <on|off>",
+                DiceVision.useForcedDice and "on" or "off",
+                DiceVision.forcedDiceChatCard and "on" or "off"))
         end
 
     elseif subcommand == "test" then
@@ -1292,6 +1464,8 @@ Commands.dv = function(args)
   /dv mode <mode>     - Set mode: off or replace
   /dv refresh         - Re-probe Codex hooks (use after Codex update)
   /dv rules           - Configure dice processing rules
+  /dv forceddice <on|off>      - Use engine forcedDice (needs new Codex build)
+  /dv forceddice card <on|off> - DiceVision chat card on forcedDice path
   /dv test            - Test API connection
 
 Modes:

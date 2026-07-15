@@ -254,7 +254,27 @@ Note the shape differs from `OnBeforeRoll` / `OnReroll`: there is no `boons`, `b
 
 #### handlePendingRoll
 
-**Two code paths based on targeting:**
+**Two top-level paths selected by `DiceVision.useForcedDice` (default `false`):**
+
+**forcedDice path (`tryForcedDicePath`, requires a Codex build where `dmhub.Roll` accepts `forcedDice`):**
+```lua
+-- Pass the INTACT expression plus the physical faces; the engine computes
+-- boons/banes, tier shifts, and nat detection natively.
+dmhub.Roll{
+    roll = "2d10+5 1 edge",   -- NOT collapsed
+    forcedDice = {{numFaces = 10, result = 7}, {numFaces = 10, result = 4}},
+    ...
+}
+```
+- `DiceRollLogic.extractExpectedDiceList(rollStr, creature)` computes the ordered face-count list the expression expects (engine `ParseRoll`/`RollToString` round-trip to strip boons, textual fallback otherwise). Supported dice: d4/d6/d8/d10/d12/d20 (d100 -> legacy fallback).
+- Clamp + value-mapping rules still apply to the physical dice (d10 0 -> 10, camera misreads). Keep-selection is NOT applied unless the user rolled more dice than expected and an explicit keep rule exists.
+- `DiceRollLogic.buildForcedDice(dice, expectedFaces)` matches physical dice to expected faces by type; refuses on count-mismatch / type-mismatch / out-of-range (never partial-force).
+- Deliberately NOT done on this path (all legacy-only workarounds for the collapsed literal): boons/banes field splitting, `multitargets[1]` zeroing, `instant = true`, `overrideTier` injection.
+- Re-rolls: `amendWithResult(originalRoll, { forcedDice = forcedDice })` - `doRerollAmend` merges extraFields into amendArgs engine-side.
+- The custom DiceVisionRollMessage chat card is OFF by default here (engine message shows real dice); `/dv forceddice card on` re-enables it. The card documents what the camera read (natural dice + static modifier); the engine message is the authoritative result including boons.
+- **Any failure falls through to the legacy path below - a roll is never lost.** forcedDice support cannot be feature-detected from Lua, hence the manual toggle.
+
+**Legacy collapse path (default) - two code paths based on targeting:**
 
 **Non-Targeted Rolls (no multitargets):**
 ```lua
@@ -347,6 +367,8 @@ Edges and banes cancel 1-for-1. Apply rules based on net (edges - banes):
 | `/dv status` | Show connection status |
 | `/dv mode <off\|replace>` | Set operation mode |
 | `/dv rules <subcommand>` | Configure dice processing rules |
+| `/dv forceddice <on\|off>` | Use engine forcedDice (needs new Codex build; default off) |
+| `/dv forceddice card <on\|off>` | DiceVision chat card on the forcedDice path (default off) |
 | `/dv test` | Test API connection |
 
 ---

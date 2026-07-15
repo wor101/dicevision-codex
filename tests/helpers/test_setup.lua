@@ -163,6 +163,10 @@ _G.resetDiceVisionState = function()
     -- Reset one-time-warning flags so each test starts cleanly.
     DiceVision.warnedMissingSetActiveRoll = nil
 
+    -- Reset forcedDice toggles (legacy path is the default)
+    DiceVision.useForcedDice = false
+    DiceVision.forcedDiceChatCard = false
+
     -- Reset panel state
     DiceVision.panelWaitingForRoll = false
     DiceVision.panelPollStartTime = 0
@@ -186,6 +190,8 @@ _G.resetDiceVisionState = function()
     -- Reset dmhub runtime stubs
     dmhub.Roll = function(rollArgs) table.insert(_G._dmhubRollLog, rollArgs); return {id = "roll-" .. #_G._dmhubRollLog} end
     dmhub.Time = function() return 0 end
+    dmhub.ParseRoll = function(rollStr, creature) return nil end
+    dmhub.RollToString = nil
 
     -- Clear capture logs
     _G._chatLog = {}
