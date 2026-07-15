@@ -8,6 +8,8 @@
 DiceVision = {
     rules = {
         valueMappings = {},
+        typeMappings = {},
+        typeMappingsOnPanel = false,
         diceSelection = nil,
         clampOutOfRange = false,
     },
@@ -51,6 +53,8 @@ _G.resetStubs = function()
     resetPrintLog()
     DiceVision.rules = {
         valueMappings = {},
+        typeMappings = {},
+        typeMappingsOnPanel = false,
         diceSelection = nil,
         clampOutOfRange = false,
     }
@@ -173,11 +177,15 @@ _G.resetDiceVisionState = function()
     DiceVision.panelRequestId = nil
     DiceVision.panelTokenId = nil
 
-    -- Reset rules to defaults (d10: 0->10)
+    -- Reset rules to defaults (d10: 0->10, d20 -> d10 type mapping)
     DiceVision.rules = {
         valueMappings = {
             ["d10"] = {[0] = 10},
         },
+        typeMappings = {
+            ["d20"] = "d10",
+        },
+        typeMappingsOnPanel = false,
         diceSelection = nil,
         clampOutOfRange = false,
     }

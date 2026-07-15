@@ -1178,6 +1178,81 @@ describe("detectPercentilePair", function()
 end)
 
 -- ============================================================================
+-- Type Mappings
+-- ============================================================================
+
+describe("applyTypeMappings", function()
+    it("remaps a matching die type and records the original", function()
+        local result = DiceRollLogic.applyTypeMappings(
+            {{type = "d20", value = 7, rawValue = "7"}},
+            {["d20"] = "d10"})
+        assert.are.equal("d10", result[1].type)
+        assert.are.equal("d20", result[1].originalType)
+        assert.are.equal(7, result[1].value)
+        assert.are.equal("7", result[1].rawValue)
+    end)
+
+    it("leaves non-mapped types untouched", function()
+        local dice = {{type = "d6", value = 4}, {type = "d20", value = 9}}
+        local result = DiceRollLogic.applyTypeMappings(dice, {["d20"] = "d10"})
+        assert.are.equal("d6", result[1].type)
+        assert.is_nil(result[1].originalType)
+        assert.are.equal("d10", result[2].type)
+    end)
+
+    it("returns dice unchanged for nil or empty mappings", function()
+        local dice = {{type = "d20", value = 7}}
+        assert.are.equal(dice, DiceRollLogic.applyTypeMappings(dice, nil))
+        assert.are.equal(dice, DiceRollLogic.applyTypeMappings(dice, {}))
+    end)
+
+    it("ignores a self-mapping", function()
+        local dice = {{type = "d10", value = 7}}
+        local result = DiceRollLogic.applyTypeMappings(dice, {["d10"] = "d10"})
+        assert.are.equal("d10", result[1].type)
+        assert.is_nil(result[1].originalType)
+    end)
+end)
+
+describe("applyDiceRules type-mapping context gating", function()
+    before_each(function()
+        resetStubs()
+        DiceVision.rules.typeMappings = {["d20"] = "d10"}
+    end)
+
+    it("applies type mappings for intercepted rolls (pendingRoll present)", function()
+        local processed = DiceRollLogic.applyDiceRules(
+            {{type = "d20", value = 7}},
+            {originalRoll = "2d10"})
+        assert.are.equal("d10", processed[1].type)
+    end)
+
+    it("does not apply type mappings for panel rolls by default", function()
+        local processed = DiceRollLogic.applyDiceRules(
+            {{type = "d20", value = 7}},
+            nil)
+        assert.are.equal("d20", processed[1].type)
+    end)
+
+    it("applies type mappings for panel rolls when opted in", function()
+        DiceVision.rules.typeMappingsOnPanel = true
+        local processed = DiceRollLogic.applyDiceRules(
+            {{type = "d20", value = 7}},
+            nil)
+        assert.are.equal("d10", processed[1].type)
+    end)
+
+    it("remapped dice pick up the target type's value mappings", function()
+        DiceVision.rules.valueMappings = {["d10"] = {[0] = 10}}
+        local processed = DiceRollLogic.applyDiceRules(
+            {{type = "d20", value = 0}},
+            {originalRoll = "1d10"})
+        assert.are.equal("d10", processed[1].type)
+        assert.are.equal(10, processed[1].value)
+    end)
+end)
+
+-- ============================================================================
 -- Forced Dice (engine forcedDice support)
 -- ============================================================================
 

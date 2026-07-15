@@ -38,12 +38,15 @@ Edges and banes cancel 1-for-1. Apply rules based on net (edges - banes):
 
 **Tier Thresholds**: T1 (1-11), T2 (12-16), T3 (17+)
 
+## Draw Steel Physical Dice
+MCDM's official Draw Steel dice are 20-sided but numbered 1-10 twice. The camera classifies dice by shape, so they arrive as `type = "d20"`. A default die-type mapping rule (`d20 -> d10`) remaps them on intercepted (native-roller) rolls; panel rolls only remap when `/dv rules type panel on` is set.
+
 ## Commands
 - `/dv connect <code>` - Connect to DiceVision session
 - `/dv disconnect` - Disconnect
 - `/dv status` - Show connection status
 - `/dv mode <off|replace>` - Set operation mode
-- `/dv rules <subcommand>` - Configure dice processing rules (map, keep, clamp, clear)
+- `/dv rules <subcommand>` - Configure dice processing rules (map, type, keep, clamp, clear)
 - `/dv forceddice <on|off>` - Use engine forcedDice (needs new Codex build; default off)
 - `/dv forceddice card <on|off>` - DiceVision chat card on the forcedDice path (default off)
 

@@ -114,6 +114,32 @@ end
 -- Dice Rule Processing
 -- ============================================================================
 
+--- Remap physical die types before any other rule runs. Exists for dice
+-- whose shape does not match their faces: MCDM's Draw Steel dice are
+-- 20-sided but numbered 1-10 twice, so the camera (which classifies by
+-- shape) reports them as "d20" while every Draw Steel expression wants
+-- d10s. mappings is { [fromType] = toType }, e.g. { ["d20"] = "d10" }.
+-- Remapped dice keep all fields and record originalType for provenance.
+function DiceRollLogic.applyTypeMappings(dice, mappings)
+    if not mappings or next(mappings) == nil then
+        return dice
+    end
+    local result = {}
+    for i, die in ipairs(dice) do
+        local mapped = mappings[die.type]
+        if mapped and mapped ~= die.type then
+            local copy = {}
+            for k, v in pairs(die) do copy[k] = v end
+            copy.type = mapped
+            copy.originalType = die.type
+            result[i] = copy
+        else
+            result[i] = die
+        end
+    end
+    return result
+end
+
 function DiceRollLogic.applyValueMappings(dice, mappings)
     if not mappings or next(mappings) == nil then
         return dice
@@ -247,6 +273,15 @@ function DiceRollLogic.applyDiceRules(dice, pendingRoll)
     local rules = DiceRollLogic.getEffectiveRules(pendingRoll)
     local processed = dice
     local droppedDice = nil
+    -- Type mappings run FIRST so remapped dice pick up the target type's
+    -- value rules (e.g. a Draw Steel d20-shaped d10 gets the d10 0 -> 10
+    -- mapping). Intercepted rolls (pendingRoll present) apply them by
+    -- default -- the roll expression declares the expected dice. Panel
+    -- rolls are freeform (a physical d20 might really be a d20), so they
+    -- require the explicit opt-in flag.
+    if pendingRoll ~= nil or DiceVision.rules.typeMappingsOnPanel then
+        processed = DiceRollLogic.applyTypeMappings(processed, DiceVision.rules.typeMappings)
+    end
     processed = DiceRollLogic.clampOutOfRangeValues(processed, DiceVision.rules.clampOutOfRange)
     processed = DiceRollLogic.applyValueMappings(processed, rules.valueMappings)
     if rules.diceSelection then

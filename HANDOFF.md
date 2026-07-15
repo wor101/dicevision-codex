@@ -267,7 +267,7 @@ dmhub.Roll{
 }
 ```
 - `DiceRollLogic.extractExpectedDiceList(rollStr, creature)` computes the ordered face-count list the expression expects (engine `ParseRoll`/`RollToString` round-trip to strip boons, textual fallback otherwise). Supported dice: d4/d6/d8/d10/d12/d20 (d100 -> legacy fallback).
-- Clamp + value-mapping rules still apply to the physical dice (d10 0 -> 10, camera misreads). Keep-selection is NOT applied unless the user rolled more dice than expected and an explicit keep rule exists.
+- Type mappings apply first (Draw Steel's 20-sided d10s arrive as "d20" and would otherwise type-mismatch -- see "Draw Steel Physical Dice" below), then clamp + value-mapping rules (d10 0 -> 10, camera misreads). Keep-selection is NOT applied unless the user rolled more dice than expected and an explicit keep rule exists.
 - Known limitation: the clamp rule is d10-centric by definition (values outside 0-10 -> 1), so with clamp enabled a legitimate d20/d12 result above 10 is clamped to 1 and forced as such. Keep clamp off when rolling non-d10 dice. (Characterization test pins this.)
 - Detected fallbacks are announced in chat (`Physical dice do not match the roll (<reason>)`), not just the debug console, since count/type/range mismatches are player-actionable.
 - `DiceRollLogic.buildForcedDice(dice, expectedFaces)` matches physical dice to expected faces by type; refuses on count-mismatch / type-mismatch / out-of-range (never partial-force).
@@ -388,14 +388,19 @@ local DEFAULT_RULES = {
     valueMappings = {
         ["d10"] = {[0] = 10},  -- Standard d10: 0 reads as 10
     },
+    typeMappings = {
+        ["d20"] = "d10",       -- Draw Steel 20-sided d10s report as "d20"
+    },
     diceSelection = nil,
 }
 
 -- Runtime rules (modified by commands)
 DiceVision.rules = {
-    valueMappings = {},      -- {dieType = {fromValue = toValue}}
-    diceSelection = nil,     -- {keep = "highest"|"lowest", count = N}
-    clampOutOfRange = false, -- Clamp values outside 0-10 to 1
+    valueMappings = {},         -- {dieType = {fromValue = toValue}}
+    typeMappings = {},          -- {fromType = toType}, e.g. {d20 = "d10"}
+    typeMappingsOnPanel = false, -- Apply type mappings to panel rolls too
+    diceSelection = nil,        -- {keep = "highest"|"lowest", count = N}
+    clampOutOfRange = false,    -- Clamp values outside 0-10 to 1
 }
 ```
 
@@ -403,6 +408,7 @@ DiceVision.rules = {
 
 | Function | Purpose | Parameters |
 |----------|---------|------------|
+| `applyTypeMappings(dice, mappings)` | Remap die types (e.g., d20 -> d10) | dice array, mapping table |
 | `clampOutOfRangeValues(dice, isEnabled)` | Clamp values outside 0-10 to 1 | dice array, boolean |
 | `applyValueMappings(dice, mappings)` | Apply value remapping (e.g., 0→10) | dice array, mapping table |
 | `applyDiceSelection(dice, selection)` | Keep highest/lowest N dice | dice array, selection config |
@@ -414,18 +420,31 @@ DiceVision.rules = {
 
 ```lua
 function applyDiceRules(dice, pendingRoll)
-    -- 1. Clamp out-of-range values first (before mappings)
+    -- 1. Type mappings first, so remapped dice pick up the target type's
+    --    value rules. Context-gated: intercepted rolls (pendingRoll
+    --    present) always; panel rolls only when typeMappingsOnPanel.
+    if pendingRoll ~= nil or DiceVision.rules.typeMappingsOnPanel then
+        processed = applyTypeMappings(processed, DiceVision.rules.typeMappings)
+    end
+
+    -- 2. Clamp out-of-range values (before value mappings)
     processed = clampOutOfRangeValues(processed, DiceVision.rules.clampOutOfRange)
 
-    -- 2. Apply value mappings (e.g., d10 0 -> 10)
+    -- 3. Apply value mappings (e.g., d10 0 -> 10)
     processed = applyValueMappings(processed, rules.valueMappings)
 
-    -- 3. Apply dice selection (keep highest/lowest N)
+    -- 4. Apply dice selection (keep highest/lowest N)
     processed, droppedDice = applyDiceSelection(processed, rules.diceSelection)
 
     return processed, droppedDice
 end
 ```
+
+Percentile detection (`detectPercentilePair`) runs on RAW dice on the panel and table paths, before any rules -- type mappings cannot cause d100 misdetection.
+
+### Draw Steel Physical Dice (why type mappings exist)
+
+MCDM's official Draw Steel dice are 20-sided but numbered 1-10 twice. The dice-vision camera classifies dice by physical shape (its taxonomy is d4/d6/d8/d10/d12/d20 only), so these dice arrive as `{type = "d20", value = 1..10}` and would type-mismatch against a `2d10` expression on the forcedDice path. The default `d20 -> d10` type mapping remaps them for intercepted rolls; panel rolls are freeform (a physical d20 might really be a d20), so they only remap when `typeMappingsOnPanel` is enabled.
 
 ### Rules Commands
 
@@ -433,6 +452,9 @@ end
 |---------|-------------|
 | `/dv rules show` | Display current rule configuration |
 | `/dv rules map <die> <from> <to>` | Add value mapping (e.g., `/dv rules map d10 0 10`) |
+| `/dv rules type <from> <to>` | Add die type mapping (e.g., `/dv rules type d20 d10`) |
+| `/dv rules type <from> clear` | Remove a die type mapping |
+| `/dv rules type panel <on\|off>` | Apply type mappings to panel rolls (default off) |
 | `/dv rules keep <highest\|lowest> <count>` | Override dice selection |
 | `/dv rules keep auto` | Use auto-detection from roll context |
 | `/dv rules clamp <on\|off>` | Toggle out-of-range clamping |

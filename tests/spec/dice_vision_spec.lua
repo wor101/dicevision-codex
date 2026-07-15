@@ -3644,6 +3644,66 @@ describe("DiceVision", function()
             assert.are.equal("creature-9", parseCreature)
         end)
 
+        it("remaps Draw Steel d20-shaped d10s via the default type mapping", function()
+            -- Draw Steel's official dice are 20-sided but numbered 1-10
+            -- twice; the camera classifies by shape and reports "d20". The
+            -- default d20 -> d10 type mapping lets them fill the
+            -- expression's d10 slots instead of type-mismatching to legacy.
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Draw Steel Dice Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d20", value = 7 },
+                    { type = "d20", value = 3 },
+                },
+                total = 10,
+            })
+
+            local logged = _G._dmhubRollLog[1]
+            assert.are.equal("2d10+5", logged.roll)
+            assert.are.same(
+                {{numFaces = 10, result = 7}, {numFaces = 10, result = 3}},
+                logged.forcedDice)
+            -- No fallback notice: the forced path handled it.
+            assert.is_false(chatHas("Physical dice do not match the roll"))
+        end)
+
+        it("applies d10 value rules to type-remapped dice", function()
+            -- A remapped Draw Steel die misread as 0 must pick up the d10
+            -- 0 -> 10 value mapping (type mapping runs first).
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10", creature = nil },
+                originalRoll = "2d10",
+                description = "Draw Steel Zero Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d20", value = 7 },
+                    { type = "d20", value = 0 },
+                },
+                total = 7,
+            })
+
+            assert.are.same(
+                {{numFaces = 10, result = 7}, {numFaces = 10, result = 10}},
+                _G._dmhubRollLog[1].forcedDice)
+        end)
+
         it("characterizes the d10-centric clamp on non-d10 dice", function()
             -- Known limitation pinned on purpose: the clamp rule is defined
             -- as "outside 0-10 -> 1", so with clamp enabled a legitimate
@@ -3651,6 +3711,10 @@ describe("DiceVision", function()
             -- such. Users rolling non-d10 dice should keep clamp off.
             setupReplaceMode()
             DiceVision.rules.clampOutOfRange = true
+            -- Clear the default d20 -> d10 type mapping: this test is about
+            -- clamp on a REAL d20, which the mapping would divert to a d10
+            -- slot mismatch.
+            DiceVision.rules.typeMappings = {}
             DiceVision.pendingRoll = {
                 rollArgs = { roll = "1d20", creature = nil },
                 originalRoll = "1d20",
@@ -3989,6 +4053,99 @@ describe("DiceVision", function()
 
             Commands.dv("status")
             assert.is_true(chatHas("ForcedDice: on (chat card: off)"))
+        end)
+    end)
+
+    -- ============================================================================
+    -- Type mapping rules (/dv rules type) and panel gating
+    -- ============================================================================
+
+    describe("type mapping rules", function()
+        it("panel rolls keep the reported die type by default", function()
+            local rollData = {
+                dice = {
+                    { type = "d20", value = 7 },
+                    { type = "d20", value = 3 },
+                },
+                total = 10,
+            }
+            DiceVision.postRollToChat(rollData)
+            local msg = _G._chatLog[1].message
+            -- Message dice carry face counts; unmapped d20s stay 20-faced.
+            assert.are.equal(20, msg.dice[1].faces)
+            assert.are.equal(20, msg.dice[2].faces)
+        end)
+
+        it("panel rolls remap when typeMappingsOnPanel is enabled", function()
+            DiceVision.rules.typeMappingsOnPanel = true
+            local rollData = {
+                dice = {
+                    { type = "d20", value = 7 },
+                },
+                total = 7,
+            }
+            DiceVision.postRollToChat(rollData)
+            local msg = _G._chatLog[1].message
+            assert.are.equal(10, msg.dice[1].faces)
+        end)
+
+        it("adds a type mapping via /dv rules type", function()
+            DiceVision.rules.typeMappings = {}
+            Commands.dv("rules type d12 d6")
+            assert.are.equal("d6", DiceVision.rules.typeMappings["d12"])
+            assert.is_true(chatHas("Type mapping: d12 -> d6"))
+        end)
+
+        it("normalizes case and rejects invalid or self mappings", function()
+            Commands.dv("rules type D12 D6")
+            assert.are.equal("d6", DiceVision.rules.typeMappings["d12"])
+
+            assert.is_false(DiceVision.setTypeMapping("d10", "d10"))
+            assert.is_false(DiceVision.setTypeMapping("banana", "d10"))
+            assert.is_false(DiceVision.setTypeMapping("d10", nil))
+        end)
+
+        it("removes a type mapping via /dv rules type <from> clear", function()
+            Commands.dv("rules type d20 clear")
+            assert.is_nil(DiceVision.rules.typeMappings["d20"])
+            assert.is_true(chatHas("Removed type mapping for d20"))
+
+            _G._chatLog = {}
+            Commands.dv("rules type d20 clear")
+            assert.is_true(chatHas("No type mapping for d20"))
+        end)
+
+        it("toggles panel application via /dv rules type panel", function()
+            Commands.dv("rules type panel on")
+            assert.is_true(DiceVision.rules.typeMappingsOnPanel)
+            Commands.dv("rules type panel off")
+            assert.is_false(DiceVision.rules.typeMappingsOnPanel)
+            _G._chatLog = {}
+            Commands.dv("rules type panel bogus")
+            assert.is_true(chatHas("/dv rules type panel <on|off>"))
+        end)
+
+        it("shows type mappings in /dv rules show and bare /dv rules type", function()
+            Commands.dv("rules show")
+            assert.is_true(chatHas("Type mappings:"))
+            assert.is_true(chatHas("d20 -> d10"))
+            assert.is_true(chatHas("Type mappings on panel rolls: disabled"))
+
+            _G._chatLog = {}
+            Commands.dv("rules type")
+            assert.is_true(chatHas("d20 -> d10"))
+            assert.is_true(chatHas("Panel rolls: off"))
+        end)
+
+        it("rules clear restores the default d20 -> d10 mapping; clear all empties it", function()
+            DiceVision.rules.typeMappings = {}
+            DiceVision.rules.typeMappingsOnPanel = true
+            Commands.dv("rules clear")
+            assert.are.equal("d10", DiceVision.rules.typeMappings["d20"])
+            assert.is_false(DiceVision.rules.typeMappingsOnPanel)
+
+            Commands.dv("rules clear all")
+            assert.is_nil(next(DiceVision.rules.typeMappings))
         end)
     end)
 end)

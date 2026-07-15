@@ -55,17 +55,29 @@ local DEFAULT_RULES = {
     valueMappings = {
         ["d10"] = {[0] = 10},  -- Standard d10: 0 reads as 10
     },
+    -- Draw Steel's official dice are 20-sided but numbered 1-10 twice; the
+    -- camera classifies by shape and reports them as "d20". Intercepted
+    -- rolls remap them to d10 by default; panel rolls only when
+    -- typeMappingsOnPanel is enabled.
+    typeMappings = {
+        ["d20"] = "d10",
+    },
     diceSelection = nil,
 }
 
 -- Dice rule configuration (initialized from defaults)
 DiceVision.rules = {
     valueMappings = {},
+    typeMappings = {},
+    typeMappingsOnPanel = false,
     diceSelection = nil,
     clampOutOfRange = false,
 }
 
 -- Apply default rules on load
+for fromType, toType in pairs(DEFAULT_RULES.typeMappings) do
+    DiceVision.rules.typeMappings[fromType] = toType
+end
 for dieType, mappings in pairs(DEFAULT_RULES.valueMappings) do
     DiceVision.rules.valueMappings[dieType] = {}
     for from, to in pairs(mappings) do
@@ -666,12 +678,16 @@ local function tryForcedDicePath(pendingRoll, rollData, diceForMessage, diceSum)
         return false
     end
 
-    -- Clamp and value mappings still apply (camera misreads, d10 0 -> 10).
+    -- Type mappings first (always here -- this is an intercepted-roll
+    -- context): Draw Steel's 20-sided d10s arrive from the camera as "d20"
+    -- and would otherwise type-mismatch against the expression's d10 slots.
+    -- Then clamp and value mappings (camera misreads, d10 0 -> 10).
     -- Keep-selection is deliberately NOT applied in general: the expression's
     -- own keep semantics run engine-side against the forced faces. Exception:
     -- an explicit user keep rule may reconcile a surplus (user rolled more
     -- dice than the expression needs).
-    local processed = DiceRollLogic.clampOutOfRangeValues(rollData.dice, DiceVision.rules.clampOutOfRange)
+    local processed = DiceRollLogic.applyTypeMappings(rollData.dice, DiceVision.rules.typeMappings)
+    processed = DiceRollLogic.clampOutOfRangeValues(processed, DiceVision.rules.clampOutOfRange)
     processed = DiceRollLogic.applyValueMappings(processed, DiceVision.rules.valueMappings)
     if #processed > #expected and DiceVision.rules.diceSelection then
         processed = DiceRollLogic.applyDiceSelection(processed, DiceVision.rules.diceSelection)
@@ -1220,6 +1236,43 @@ DiceVision.removeValueMapping = function(dieType, fromVal)
     return true
 end
 
+DiceVision.setTypeMapping = function(fromType, toType)
+    fromType = type(fromType) == "string" and fromType:lower() or nil
+    toType = type(toType) == "string" and toType:lower() or nil
+    if not (fromType and toType
+        and fromType:match("^d%d+$") and toType:match("^d%d+$")) then
+        chat.Send("[DiceVision] Usage: /dv rules type <fromDie> <toDie> (e.g. /dv rules type d20 d10)")
+        return false
+    end
+    if fromType == toType then
+        chat.Send("[DiceVision] Type mapping must change the die type")
+        return false
+    end
+    DiceVision.rules.typeMappings[fromType] = toType
+    chat.Send(string.format("[DiceVision] Type mapping: %s -> %s", fromType, toType))
+    return true
+end
+
+DiceVision.removeTypeMapping = function(fromType)
+    fromType = type(fromType) == "string" and fromType:lower() or nil
+    if not (fromType and DiceVision.rules.typeMappings[fromType]) then
+        return false
+    end
+    DiceVision.rules.typeMappings[fromType] = nil
+    chat.Send(string.format("[DiceVision] Removed type mapping for %s", fromType))
+    return true
+end
+
+DiceVision.setTypeMappingsOnPanel = function(enabled)
+    DiceVision.rules.typeMappingsOnPanel = enabled and true or false
+    if DiceVision.rules.typeMappingsOnPanel then
+        chat.Send("[DiceVision] Type mappings will apply to panel rolls")
+    else
+        chat.Send("[DiceVision] Type mappings will not apply to panel rolls (intercepted rolls only)")
+    end
+    return DiceVision.rules.typeMappingsOnPanel
+end
+
 DiceVision.setDiceSelection = function(mode, count)
     count = tonumber(count)
     if mode == "auto" or mode == "clear" then
@@ -1265,10 +1318,19 @@ DiceVision.setForcedDiceChatCard = function(enabled)
 end
 
 DiceVision.clearRules = function(clearAll)
-    DiceVision.rules = {valueMappings = {}, diceSelection = nil, clampOutOfRange = false}
+    DiceVision.rules = {
+        valueMappings = {},
+        typeMappings = {},
+        typeMappingsOnPanel = false,
+        diceSelection = nil,
+        clampOutOfRange = false,
+    }
     if clearAll then
         chat.Send("[DiceVision] All rules cleared (including defaults)")
     else
+        for fromType, toType in pairs(DEFAULT_RULES.typeMappings) do
+            DiceVision.rules.typeMappings[fromType] = toType
+        end
         for dieType, mappings in pairs(DEFAULT_RULES.valueMappings) do
             DiceVision.rules.valueMappings[dieType] = {}
             for from, to in pairs(mappings) do
@@ -1472,6 +1534,15 @@ Commands.dv = function(args)
             else
                 msg = msg .. "  Value mappings: none\n"
             end
+            if next(DiceVision.rules.typeMappings) then
+                msg = msg .. "  Type mappings:\n"
+                for fromType, toType in pairs(DiceVision.rules.typeMappings) do
+                    msg = msg .. string.format("    %s -> %s\n", fromType, toType)
+                end
+            else
+                msg = msg .. "  Type mappings: none\n"
+            end
+            msg = msg .. "  Type mappings on panel rolls: " .. (DiceVision.rules.typeMappingsOnPanel and "enabled" or "disabled") .. "\n"
             msg = msg .. "  Dice selection: " .. (DiceVision.rules.diceSelection and
                 string.format("keep %s %d", DiceVision.rules.diceSelection.keep, DiceVision.rules.diceSelection.count) or "auto-detect") .. "\n"
             msg = msg .. "  Out-of-range clamping: " .. (DiceVision.rules.clampOutOfRange and "enabled" or "disabled")
@@ -1479,6 +1550,37 @@ Commands.dv = function(args)
 
         elseif action == "map" then
             DiceVision.setValueMapping(parts[3], parts[4], parts[5])
+
+        elseif action == "type" then
+            local arg3 = parts[3]
+            local arg4 = parts[4]
+            if arg3 == "panel" then
+                if arg4 == "on" then
+                    DiceVision.setTypeMappingsOnPanel(true)
+                elseif arg4 == "off" then
+                    DiceVision.setTypeMappingsOnPanel(false)
+                else
+                    chat.Send("[DiceVision] Usage: /dv rules type panel <on|off>")
+                end
+            elseif arg3 and arg4 == "clear" then
+                if not DiceVision.removeTypeMapping(arg3) then
+                    chat.Send(string.format("[DiceVision] No type mapping for %s", tostring(arg3)))
+                end
+            elseif arg3 and arg4 then
+                DiceVision.setTypeMapping(arg3, arg4)
+            else
+                local msg = "[DiceVision] Type mappings"
+                if next(DiceVision.rules.typeMappings) then
+                    for fromType, toType in pairs(DiceVision.rules.typeMappings) do
+                        msg = msg .. string.format("\n  %s -> %s", fromType, toType)
+                    end
+                else
+                    msg = msg .. ": none"
+                end
+                msg = msg .. "\n  Panel rolls: " .. (DiceVision.rules.typeMappingsOnPanel and "on" or "off")
+                msg = msg .. "\nUsage: /dv rules type <from> <to> | /dv rules type <from> clear | /dv rules type panel <on|off>"
+                chat.Send(msg)
+            end
 
         elseif action == "keep" then
             DiceVision.setDiceSelection(parts[3], parts[4])
@@ -1502,6 +1604,9 @@ Commands.dv = function(args)
 [DiceVision] Rule commands:
   /dv rules show                    - Show current rules
   /dv rules map <die> <from> <to>   - Map die value (e.g., /dv rules map d10 0 10)
+  /dv rules type <from> <to>        - Map die type (e.g., /dv rules type d20 d10)
+  /dv rules type <from> clear       - Remove a die type mapping
+  /dv rules type panel <on|off>     - Apply type mappings to panel rolls
   /dv rules keep <mode> <count>     - Keep highest/lowest N dice
   /dv rules keep auto               - Auto-detect from roll context
   /dv rules clamp <on|off>          - Clamp values outside 0-10 to 1
