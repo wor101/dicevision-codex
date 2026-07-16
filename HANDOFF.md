@@ -254,7 +254,31 @@ Note the shape differs from `OnBeforeRoll` / `OnReroll`: there is no `boons`, `b
 
 #### handlePendingRoll
 
-**Two code paths based on targeting:**
+**Two top-level paths selected by `DiceVision.useForcedDice` (default `true`; never auto-disabled -- an unsupported build must be turned off manually with `/dv forceddice off`):**
+
+**forcedDice path (`tryForcedDicePath`, requires a Codex build where `dmhub.Roll` accepts `forcedDice`):**
+```lua
+-- Pass the INTACT expression plus the physical faces; the engine computes
+-- boons/banes, tier shifts, and nat detection natively.
+dmhub.Roll{
+    roll = "2d10+5 1 edge",   -- NOT collapsed
+    forcedDice = {{numFaces = 10, result = 7}, {numFaces = 10, result = 4}},
+    ...
+}
+```
+- `DiceRollLogic.extractExpectedDiceList(rollStr, creature)` computes the ordered face-count list the expression expects (engine `ParseRoll`/`RollToString` round-trip to strip boons, textual fallback otherwise). Supported dice: d4/d6/d8/d10/d12/d20 (d100 -> legacy fallback).
+- Type mappings apply first (Draw Steel's 20-sided d10s arrive as "d20" and would otherwise type-mismatch -- see "Draw Steel Physical Dice" below), then clamp + value-mapping rules (d10 0 -> 10, camera misreads). Keep-selection is NOT applied unless the user rolled more dice than expected and an explicit keep rule exists.
+- Known limitation: the clamp rule is d10-centric by definition (values outside 0-10 -> 1), so with clamp enabled a legitimate d20/d12 result above 10 is clamped to 1 and forced as such. Keep clamp off when rolling non-d10 dice. (Characterization test pins this.)
+- Detected fallbacks are announced in chat (`Physical dice do not match the roll (<reason>)`), not just the debug console, since count/type/range mismatches are player-actionable. When a die-type mapping contributed (e.g. a REAL d20 rolled for a d20 expression gets diverted by the default `d20 -> d10` rule), the notice names the mapping and points at `/dv rules type`; successful remaps leave a debug-console breadcrumb.
+- `DiceRollLogic.buildForcedDice(dice, expectedFaces)` matches physical dice to expected faces by type; refuses on count-mismatch / type-mismatch / out-of-range (never partial-force).
+- Deliberately NOT done on this path (all legacy-only workarounds for the collapsed literal): boons/banes field splitting, `multitargets[1]` zeroing, `instant = true`, `overrideTier` injection.
+- Re-rolls: `amendWithResult(originalRoll, { forcedDice = forcedDice })` - `doRerollAmend` (dialog Lua in DSRollDialog.lua / EmbeddedRollDialog.lua) merges extraFields into amendArgs before `Amend()`; requires a dialog version whose `doRerollAmend` accepts extraFields.
+- The custom DiceVisionRollMessage chat card is OFF by default here (engine message shows real dice); `/dv forceddice card on` re-enables it. The card documents what the camera read (natural dice + static modifier); the engine message is the authoritative result including boons.
+- **Any failure the mod can detect falls through to the legacy path below.** The exception is a Codex build without forcedDice support: it cannot be feature-detected from Lua, and the engine silently ignores the field and rolls VIRTUAL dice, discarding the physical values.
+- **Verification is best-effort and NON-DISABLING.** The `complete` wrapper never sets `useForcedDice = false`. History: a post-roll comparison of `rollInfo.rolls` against the forced values (`DiceRollLogic.forcedDiceHonored`) produced false negatives that disabled a WORKING feature, because Codex's `doRerollAmend` reuses and RE-FIRES the initial roll's `complete` wrapper with the reroll's `rollInfo` (and for a power roll the reroll fires BEFORE the initial completion), while the closure still holds the initial forced set -- so the value comparison saw a mismatch even though the engine honored the dice. Three attempts to make the comparison robust (deterministic latch, global latch, per-roll `checked`) all failed against this ordering. The wrapper now keeps only one signal: a single quiet, once-per-session note when the engine returns NO readable dice at all (`forcedDiceHonored == nil`). Rerolls yield a value mismatch (`false`), not `nil`, so they never trigger it, and an old build that returns readable-but-virtual dice is not auto-detected -- the user turns it off with `/dv forceddice off`. `warnedUnverifiedForcedDice` gates the note and re-arms on connect and `/dv forceddice on`.
+- An uncaught Lua error inside `tryForcedDicePath` is caught by a `pcall` at the fork in `handlePendingRoll` and falls through to legacy; without it the error would strand `isPolling=true` and wedge all subsequent rolls.
+
+**Legacy collapse path (fallback, or `/dv forceddice off`) - two code paths based on targeting:**
 
 **Non-Targeted Rolls (no multitargets):**
 ```lua
@@ -347,6 +371,8 @@ Edges and banes cancel 1-for-1. Apply rules based on net (edges - banes):
 | `/dv status` | Show connection status |
 | `/dv mode <off\|replace>` | Set operation mode |
 | `/dv rules <subcommand>` | Configure dice processing rules |
+| `/dv forceddice <on\|off>` | Use engine forcedDice (default on; never auto-disables, turn off manually on unsupported builds) |
+| `/dv forceddice card <on\|off>` | DiceVision chat card on the forcedDice path (default off) |
 | `/dv test` | Test API connection |
 
 ---
@@ -363,14 +389,20 @@ local DEFAULT_RULES = {
     valueMappings = {
         ["d10"] = {[0] = 10},  -- Standard d10: 0 reads as 10
     },
+    typeMappings = {
+        ["d20"] = "d10",       -- Draw Steel 20-sided d10s report as "d20"
+        ["d6"] = "d3",         -- 6-sided d3s (numbered 1-3 twice) report as "d6"
+    },
     diceSelection = nil,
 }
 
 -- Runtime rules (modified by commands)
 DiceVision.rules = {
-    valueMappings = {},      -- {dieType = {fromValue = toValue}}
-    diceSelection = nil,     -- {keep = "highest"|"lowest", count = N}
-    clampOutOfRange = false, -- Clamp values outside 0-10 to 1
+    valueMappings = {},         -- {dieType = {fromValue = toValue}}
+    typeMappings = {},          -- {fromType = toType}, e.g. {d20 = "d10"}
+    typeMappingsOnPanel = false, -- Apply type mappings to panel rolls too
+    diceSelection = nil,        -- {keep = "highest"|"lowest", count = N}
+    clampOutOfRange = false,    -- Clamp values outside 0-10 to 1
 }
 ```
 
@@ -378,8 +410,9 @@ DiceVision.rules = {
 
 | Function | Purpose | Parameters |
 |----------|---------|------------|
+| `applyTypeMappings(dice, mappings)` | Remap die types (e.g., d20 -> d10) | dice array, mapping table |
 | `clampOutOfRangeValues(dice, isEnabled)` | Clamp values outside 0-10 to 1 | dice array, boolean |
-| `applyValueMappings(dice, mappings)` | Apply value remapping (e.g., 0→10) | dice array, mapping table |
+| `applyValueMappings(dice, mappings)` | Apply value remapping (e.g., 0 -> 10) | dice array, mapping table |
 | `applyDiceSelection(dice, selection)` | Keep highest/lowest N dice | dice array, selection config |
 | `detectDiceSelection(pendingRoll)` | Auto-detect numKeep from roll context | pendingRoll object |
 | `getEffectiveRules(pendingRoll)` | Merge manual rules with auto-detection | pendingRoll object |
@@ -389,18 +422,37 @@ DiceVision.rules = {
 
 ```lua
 function applyDiceRules(dice, pendingRoll)
-    -- 1. Clamp out-of-range values first (before mappings)
+    -- 1. Type mappings first, so remapped dice pick up the target type's
+    --    value rules. Context-gated: intercepted rolls (pendingRoll
+    --    present) always; panel rolls only when typeMappingsOnPanel.
+    if pendingRoll ~= nil or DiceVision.rules.typeMappingsOnPanel then
+        processed = applyTypeMappings(processed, DiceVision.rules.typeMappings)
+    end
+
+    -- 2. Clamp out-of-range values (before value mappings)
     processed = clampOutOfRangeValues(processed, DiceVision.rules.clampOutOfRange)
 
-    -- 2. Apply value mappings (e.g., d10 0 -> 10)
+    -- 3. Apply value mappings (e.g., d10 0 -> 10)
     processed = applyValueMappings(processed, rules.valueMappings)
 
-    -- 3. Apply dice selection (keep highest/lowest N)
+    -- 4. Apply dice selection (keep highest/lowest N)
     processed, droppedDice = applyDiceSelection(processed, rules.diceSelection)
 
     return processed, droppedDice
 end
 ```
+
+Percentile detection (`detectPercentilePair`) always takes the RAW `rollData.dice` array (panel path: top of `postRollToChat`; table path: inside `handlePendingRoll`), never the rule-processed copy -- so type mappings cannot cause d100 misdetection. Note the table path runs `buildDiceMessage` (and therefore the rules) BEFORE detection chronologically; the protection is the raw input, not the ordering.
+
+### Draw Steel Physical Dice (why type mappings exist)
+
+MCDM's official Draw Steel dice are 20-sided but numbered 1-10 twice, and physical d3s are 6-sided but numbered 1-3 twice. The dice-vision camera classifies dice by physical shape (its taxonomy is d4/d6/d8/d10/d12/d20 only -- see `DiceType` in dice-vision `backend/app/models/shared_types.py`), so these dice arrive as `{type = "d20", value = 1..10}` / `{type = "d6", value = 1..3}` and would type-mismatch against `2d10` / `1d3` expressions on the forcedDice path. The default `d20 -> d10` and `d6 -> d3` type mappings remap them for intercepted rolls; panel rolls are freeform (a physical d20/d6 might really be a d20/d6), so they only remap when `typeMappingsOnPanel` is enabled.
+
+d3 forcing works because d3 is first-class in Codex's Draw Steel UI: the dice panel tile rolls `dmhub.Roll{numDice = 1, numFaces = 3}` and renders it on the d6 geometry showing 1-3 (see `Draw Steel UX Update/DicePanel.lua`), and rollable tables offer `1d3`. The DiceVision chat card mirrors that choice: `CreateDiePanel` renders `faces = 3` on the d6 icon (no d3 icon exists). Because no official code path forces a d3 and whether `rollInfo.rolls` reports such a die as 3- or 6-faced is unverifiable from Lua, `forcedDiceHonored` accepts either face count for a forced d3 entry (this mattered when the honor check drove an auto-disable; the check is now non-disabling, but the equivalence is retained for correctness of its `nil`/value semantics).
+
+Note: Codex's own dice-panel tiles (the 3/6/10/Power Roll buttons) call `dmhub.Roll` directly and are never intercepted by DiceVision -- only rolls that pass through `RollDialog.OnBeforeRoll`/`OnReroll`/`OnBeforeTableRoll` are. Rolling a physical die against a Codex panel tile does nothing to that roll.
+
+Trade-off (same as the real-d20 divert): a REAL d6 rolled for a d6 expression is remapped to d3 and diverts to the announced legacy fallback naming the mapping. Remove with `/dv rules type d6 clear` if real d6s are in play.
 
 ### Rules Commands
 
@@ -408,6 +460,9 @@ end
 |---------|-------------|
 | `/dv rules show` | Display current rule configuration |
 | `/dv rules map <die> <from> <to>` | Add value mapping (e.g., `/dv rules map d10 0 10`) |
+| `/dv rules type <from> <to>` | Add die type mapping (e.g., `/dv rules type d20 d10`) |
+| `/dv rules type <from> clear` | Remove a die type mapping |
+| `/dv rules type panel <on\|off>` | Apply type mappings to panel rolls (default off) |
 | `/dv rules keep <highest\|lowest> <count>` | Override dice selection |
 | `/dv rules keep auto` | Use auto-detection from roll context |
 | `/dv rules clamp <on\|off>` | Toggle out-of-range clamping |

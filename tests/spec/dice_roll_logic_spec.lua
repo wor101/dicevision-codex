@@ -29,10 +29,23 @@ describe("extractModifierFromRoll", function()
         assert.are.equal(100, DiceRollLogic.extractModifierFromRoll("1d20+100"))
     end)
 
-    it("extracts the first modifier when multiple signs exist", function()
+    it("sums multiple standalone modifiers", function()
+        assert.are.equal(8, DiceRollLogic.extractModifierFromRoll("2d10+5+3"))
+        assert.are.equal(2, DiceRollLogic.extractModifierFromRoll("2d10+5-3"))
+    end)
+
+    it("does not read a dice group count as a modifier", function()
+        -- "+2" belongs to "+2d6" here; only "+3" is a modifier.
+        assert.are.equal(3, DiceRollLogic.extractModifierFromRoll("1d10+2d6+3"))
+        assert.are.equal(0, DiceRollLogic.extractModifierFromRoll("1d10+2d6"))
+        assert.are.equal(-1, DiceRollLogic.extractModifierFromRoll("2d6+1d10-1"))
+    end)
+
+    it("sums all modifiers when multiple signs exist", function()
+        -- Previously only the first sign+num pattern was matched (+3);
+        -- multi-term expressions now sum correctly: +3-1 = 2.
         local result = DiceRollLogic.extractModifierFromRoll("2d10+3-1")
-        -- Should match the first sign+num pattern: +3
-        assert.are.equal(3, result)
+        assert.are.equal(2, result)
     end)
 end)
 
@@ -1161,5 +1174,413 @@ describe("detectPercentilePair", function()
         local result = DiceRollLogic.detectPercentilePair(dice)
         assert.is_not_nil(result)
         assert.are.equal(9, result.total)
+    end)
+end)
+
+-- ============================================================================
+-- Type Mappings
+-- ============================================================================
+
+describe("applyTypeMappings", function()
+    it("remaps a matching die type and records the original", function()
+        local result = DiceRollLogic.applyTypeMappings(
+            {{type = "d20", value = 7, rawValue = "7"}},
+            {["d20"] = "d10"})
+        assert.are.equal("d10", result[1].type)
+        assert.are.equal("d20", result[1].originalType)
+        assert.are.equal(7, result[1].value)
+        assert.are.equal("7", result[1].rawValue)
+    end)
+
+    it("leaves non-mapped types untouched", function()
+        local dice = {{type = "d6", value = 4}, {type = "d20", value = 9}}
+        local result = DiceRollLogic.applyTypeMappings(dice, {["d20"] = "d10"})
+        assert.are.equal("d6", result[1].type)
+        assert.is_nil(result[1].originalType)
+        assert.are.equal("d10", result[2].type)
+    end)
+
+    it("returns dice unchanged for nil or empty mappings", function()
+        local dice = {{type = "d20", value = 7}}
+        assert.are.equal(dice, DiceRollLogic.applyTypeMappings(dice, nil))
+        assert.are.equal(dice, DiceRollLogic.applyTypeMappings(dice, {}))
+    end)
+
+    it("ignores a self-mapping", function()
+        local dice = {{type = "d10", value = 7}}
+        local result = DiceRollLogic.applyTypeMappings(dice, {["d10"] = "d10"})
+        assert.are.equal("d10", result[1].type)
+        assert.is_nil(result[1].originalType)
+    end)
+
+    it("applies mappings in a single pass with no chaining", function()
+        -- {d20 -> d12, d12 -> d10}: a d20 becomes a d12, NOT a d10. A
+        -- future fixpoint 'improvement' would change results silently (or
+        -- infinite-loop on a swap cycle) -- this pins the contract.
+        local result = DiceRollLogic.applyTypeMappings(
+            {{type = "d20", value = 7}, {type = "d12", value = 5}},
+            {["d20"] = "d12", ["d12"] = "d10"})
+        assert.are.equal("d12", result[1].type)
+        assert.are.equal("d10", result[2].type)
+    end)
+
+    it("handles a swap cycle safely", function()
+        local result = DiceRollLogic.applyTypeMappings(
+            {{type = "d20", value = 7}, {type = "d10", value = 5}},
+            {["d20"] = "d10", ["d10"] = "d20"})
+        assert.are.equal("d10", result[1].type)
+        assert.are.equal("d20", result[2].type)
+    end)
+end)
+
+describe("provenance fields survive the rules pipeline", function()
+    it("originalType survives clampOutOfRangeValues and applyValueMappings", function()
+        local dice = DiceRollLogic.applyTypeMappings(
+            {{type = "d20", value = 0}},
+            {["d20"] = "d10"})
+        dice = DiceRollLogic.clampOutOfRangeValues(dice, true)
+        dice = DiceRollLogic.applyValueMappings(dice, {["d10"] = {[0] = 10}})
+        assert.are.equal("d10", dice[1].type)
+        assert.are.equal("d20", dice[1].originalType)
+        assert.are.equal(10, dice[1].value)
+    end)
+
+    it("clamp's originalValue survives applyValueMappings", function()
+        -- Regression pin: applyValueMappings used to rebuild dice with
+        -- originalValue=nil for unmapped values, erasing the clamp's
+        -- record of what the camera actually read.
+        local dice = DiceRollLogic.clampOutOfRangeValues(
+            {{type = "d10", value = 15}}, true)
+        assert.are.equal(15, dice[1].originalValue)
+        dice = DiceRollLogic.applyValueMappings(dice, {["d10"] = {[0] = 10}})
+        assert.are.equal(15, dice[1].originalValue)
+        assert.are.equal(1, dice[1].value)
+    end)
+end)
+
+describe("isSupportedDieType", function()
+    it("accepts the engine-renderable dice", function()
+        for _, dieType in ipairs({"d3", "d4", "d6", "d8", "d10", "d12", "d20"}) do
+            assert.is_true(DiceRollLogic.isSupportedDieType(dieType))
+        end
+        assert.is_true(DiceRollLogic.isSupportedDieType("D10"))
+    end)
+
+    it("rejects unforceable or malformed types", function()
+        assert.is_false(DiceRollLogic.isSupportedDieType("d100"))
+        assert.is_false(DiceRollLogic.isSupportedDieType("d0"))
+        assert.is_false(DiceRollLogic.isSupportedDieType("d1000"))
+        assert.is_false(DiceRollLogic.isSupportedDieType("banana"))
+        assert.is_false(DiceRollLogic.isSupportedDieType(nil))
+        assert.is_false(DiceRollLogic.isSupportedDieType(10))
+    end)
+end)
+
+describe("applyDiceRules type-mapping context gating", function()
+    before_each(function()
+        resetStubs()
+        DiceVision.rules.typeMappings = {["d20"] = "d10"}
+    end)
+
+    it("applies type mappings for intercepted rolls (pendingRoll present)", function()
+        local processed = DiceRollLogic.applyDiceRules(
+            {{type = "d20", value = 7}},
+            {originalRoll = "2d10"})
+        assert.are.equal("d10", processed[1].type)
+    end)
+
+    it("does not apply type mappings for panel rolls by default", function()
+        local processed = DiceRollLogic.applyDiceRules(
+            {{type = "d20", value = 7}},
+            nil)
+        assert.are.equal("d20", processed[1].type)
+    end)
+
+    it("applies type mappings for panel rolls when opted in", function()
+        DiceVision.rules.typeMappingsOnPanel = true
+        local processed = DiceRollLogic.applyDiceRules(
+            {{type = "d20", value = 7}},
+            nil)
+        assert.are.equal("d10", processed[1].type)
+    end)
+
+    it("remapped dice pick up the target type's value mappings", function()
+        DiceVision.rules.valueMappings = {["d10"] = {[0] = 10}}
+        local processed = DiceRollLogic.applyDiceRules(
+            {{type = "d20", value = 0}},
+            {originalRoll = "1d10"})
+        assert.are.equal("d10", processed[1].type)
+        assert.are.equal(10, processed[1].value)
+    end)
+end)
+
+-- ============================================================================
+-- Forced Dice (engine forcedDice support)
+-- ============================================================================
+
+describe("extractExpectedDiceList", function()
+    before_each(function()
+        resetStubs()
+    end)
+
+    it("extracts dice from a simple expression", function()
+        assert.are.same({10, 10}, DiceRollLogic.extractExpectedDiceList("2d10+3"))
+    end)
+
+    it("extracts a single die with implicit count", function()
+        assert.are.same({20}, DiceRollLogic.extractExpectedDiceList("d20"))
+    end)
+
+    it("strips edges textually when engine round-trip is unavailable", function()
+        -- Default stubs: ParseRoll returns nil, RollToString undefined.
+        assert.are.same({10, 10}, DiceRollLogic.extractExpectedDiceList("2d10 1 edge"))
+        assert.are.same({10, 10}, DiceRollLogic.extractExpectedDiceList("2d10 2 banes"))
+    end)
+
+    it("flattens keep expressions to the full dice count", function()
+        -- Engine keep semantics run against the forced faces, so all
+        -- physical dice must be supplied.
+        assert.are.same({10, 10, 10}, DiceRollLogic.extractExpectedDiceList("3d10 keep 2"))
+    end)
+
+    it("supports d3 expressions", function()
+        -- d3 is first-class in Codex's Draw Steel UI (panel tile, tables).
+        assert.are.same({3}, DiceRollLogic.extractExpectedDiceList("1d3"))
+        assert.are.same({3, 3}, DiceRollLogic.extractExpectedDiceList("2d3+1"))
+    end)
+
+    it("handles mixed dice groups in order", function()
+        assert.are.same({6, 6, 10}, DiceRollLogic.extractExpectedDiceList("2d6+1d10"))
+    end)
+
+    it("uses the engine round-trip and nils boons/banes when available", function()
+        local parseArgs, toStringArg
+        dmhub.ParseRoll = function(rollStr, creature)
+            parseArgs = {rollStr = rollStr, creature = creature}
+            return {boons = 1, banes = 0, categories = {}}
+        end
+        dmhub.RollToString = function(parsed)
+            toStringArg = parsed
+            return "2d10"
+        end
+        local result = DiceRollLogic.extractExpectedDiceList("2d10 1 edge", "creature-1")
+        dmhub.RollToString = nil
+        assert.are.same({10, 10}, result)
+        assert.are.equal("2d10 1 edge", parseArgs.rollStr)
+        assert.are.equal("creature-1", parseArgs.creature)
+        assert.is_nil(toStringArg.boons)
+        assert.is_nil(toStringArg.banes)
+    end)
+
+    it("returns nil for unsupported dice (d100)", function()
+        assert.is_nil(DiceRollLogic.extractExpectedDiceList("1d100"))
+    end)
+
+    it("falls back to textual stripping when ParseRoll throws", function()
+        dmhub.ParseRoll = function() error("engine parse error") end
+        dmhub.RollToString = function() return "should not be reached" end
+        local result = DiceRollLogic.extractExpectedDiceList("2d10 1 edge")
+        dmhub.RollToString = nil
+        assert.are.same({10, 10}, result)
+    end)
+
+    it("falls back to textual stripping when RollToString returns a non-string", function()
+        dmhub.ParseRoll = function() return {boons = 1, banes = 0} end
+        dmhub.RollToString = function() return {} end
+        local result = DiceRollLogic.extractExpectedDiceList("2d10 1 edge")
+        dmhub.RollToString = nil
+        assert.are.same({10, 10}, result)
+    end)
+
+    it("returns nil for expressions with no dice", function()
+        assert.is_nil(DiceRollLogic.extractExpectedDiceList("5"))
+    end)
+
+    it("returns nil for non-string input", function()
+        assert.is_nil(DiceRollLogic.extractExpectedDiceList(nil))
+        assert.is_nil(DiceRollLogic.extractExpectedDiceList(15))
+    end)
+end)
+
+describe("buildForcedDice", function()
+    it("builds entries in expression order", function()
+        local forced = DiceRollLogic.buildForcedDice(
+            {{type = "d10", value = 7}, {type = "d10", value = 3}},
+            {10, 10})
+        assert.are.same({{numFaces = 10, result = 7}, {numFaces = 10, result = 3}}, forced)
+    end)
+
+    it("matches mixed faces by type regardless of arrival order", function()
+        local forced = DiceRollLogic.buildForcedDice(
+            {{type = "d6", value = 4}, {type = "d10", value = 9}},
+            {10, 6})
+        assert.are.same({{numFaces = 10, result = 9}, {numFaces = 6, result = 4}}, forced)
+    end)
+
+    it("accepts a d10 result of 10 (post 0->10 mapping)", function()
+        local forced = DiceRollLogic.buildForcedDice(
+            {{type = "d10", value = 10}},
+            {10})
+        assert.are.same({{numFaces = 10, result = 10}}, forced)
+    end)
+
+    it("returns count-mismatch when dice counts differ", function()
+        local forced, reason = DiceRollLogic.buildForcedDice(
+            {{type = "d10", value = 7}},
+            {10, 10})
+        assert.is_nil(forced)
+        assert.are.equal("count-mismatch", reason)
+    end)
+
+    it("returns type-mismatch when a die type is missing", function()
+        local forced, reason = DiceRollLogic.buildForcedDice(
+            {{type = "d10", value = 7}, {type = "d10", value = 3}},
+            {10, 6})
+        assert.is_nil(forced)
+        assert.are.equal("type-mismatch", reason)
+    end)
+
+    it("returns out-of-range for an unmapped d10 zero", function()
+        local forced, reason = DiceRollLogic.buildForcedDice(
+            {{type = "d10", value = 0}},
+            {10})
+        assert.is_nil(forced)
+        assert.are.equal("out-of-range", reason)
+    end)
+
+    it("returns out-of-range for a value above the face count", function()
+        local forced, reason = DiceRollLogic.buildForcedDice(
+            {{type = "d6", value = 7}},
+            {6})
+        assert.is_nil(forced)
+        assert.are.equal("out-of-range", reason)
+    end)
+
+    it("returns out-of-range for a fractional value", function()
+        -- Engine behavior for non-integer results is undefined; refuse.
+        local forced, reason = DiceRollLogic.buildForcedDice(
+            {{type = "d6", value = 2.5}},
+            {6})
+        assert.is_nil(forced)
+        assert.are.equal("out-of-range", reason)
+    end)
+
+    it("returns type-mismatch for an unrecognized die type", function()
+        -- getDiceFaces defaults unknown types to 10; buildForcedDice must
+        -- NOT, or garbage entries would force d10 slots.
+        local forced, reason = DiceRollLogic.buildForcedDice(
+            {{type = "unknown", value = 5}},
+            {10})
+        assert.is_nil(forced)
+        assert.are.equal("type-mismatch", reason)
+    end)
+
+    it("returns type-mismatch for a non-string die type", function()
+        local forced, reason = DiceRollLogic.buildForcedDice(
+            {{type = nil, value = 5}},
+            {10})
+        assert.is_nil(forced)
+        assert.are.equal("type-mismatch", reason)
+    end)
+
+    it("returns missing-input for nil arguments", function()
+        local forced, reason = DiceRollLogic.buildForcedDice(nil, {10})
+        assert.is_nil(forced)
+        assert.are.equal("missing-input", reason)
+        forced, reason = DiceRollLogic.buildForcedDice({}, nil)
+        assert.is_nil(forced)
+        assert.are.equal("missing-input", reason)
+    end)
+end)
+
+describe("forcedDiceHonored", function()
+    local FORCED = {{numFaces = 10, result = 7}, {numFaces = 10, result = 3}}
+
+    it("returns true when every forced entry appears in the rolled dice", function()
+        assert.is_true(DiceRollLogic.forcedDiceHonored(
+            { rolls = {
+                { result = 7, numFaces = 10 },
+                { result = 3, numFaces = 10 },
+            }},
+            FORCED))
+    end)
+
+    it("returns true on a subset match with extra rolled dice", function()
+        -- Game-system mechanics may add dice beyond the forced ones.
+        assert.is_true(DiceRollLogic.forcedDiceHonored(
+            { rolls = {
+                { result = 7, numFaces = 10 },
+                { result = 2, numFaces = 4 },
+                { result = 3, numFaces = 10 },
+            }},
+            FORCED))
+    end)
+
+    it("returns false when a forced value was not rolled", function()
+        assert.is_false(DiceRollLogic.forcedDiceHonored(
+            { rolls = {
+                { result = 2, numFaces = 10 },
+                { result = 9, numFaces = 10 },
+            }},
+            FORCED))
+    end)
+
+    it("does not reuse one rolled die for two forced duplicates", function()
+        assert.is_false(DiceRollLogic.forcedDiceHonored(
+            { rolls = {
+                { result = 7, numFaces = 10 },
+                { result = 2, numFaces = 10 },
+            }},
+            {{numFaces = 10, result = 7}, {numFaces = 10, result = 7}}))
+    end)
+
+    it("returns nil when rollInfo has no readable rolls", function()
+        assert.is_nil(DiceRollLogic.forcedDiceHonored({}, FORCED))
+        assert.is_nil(DiceRollLogic.forcedDiceHonored({ rolls = {} }, FORCED))
+        assert.is_nil(DiceRollLogic.forcedDiceHonored(nil, FORCED))
+    end)
+
+    it("returns nil (does not throw) when a rolled entry errors on field access", function()
+        -- rolls entries may be userdata-backed proxies whose field access
+        -- raises. That must read as "cannot verify" (nil) and never escape:
+        -- this function runs inside the un-pcall'd complete callback, and a
+        -- throw there would block Codex's own roll completion.
+        local throwingEntry = setmetatable({}, {
+            __index = function() error("proxy access denied") end,
+        })
+        assert.is_nil(DiceRollLogic.forcedDiceHonored(
+            { rolls = { throwingEntry } }, FORCED))
+    end)
+
+    it("returns nil for a missing or empty forcedDice table", function()
+        local info = { rolls = {{ result = 7, numFaces = 10 }} }
+        assert.is_nil(DiceRollLogic.forcedDiceHonored(info, nil))
+        assert.is_nil(DiceRollLogic.forcedDiceHonored(info, {}))
+    end)
+
+    it("accepts a 6-faced rolled die for a forced d3 entry", function()
+        -- The engine renders d3 on the d6 model; whether rollInfo.rolls
+        -- reports 3 or 6 faces is unverifiable from Lua, so either must
+        -- pass or a 6-faced report would read as a value mismatch on
+        -- every 1d3 roll (and, historically, auto-disabled the feature
+        -- back when the mismatch return was acted on).
+        assert.is_true(DiceRollLogic.forcedDiceHonored(
+            { rolls = {{ result = 2, numFaces = 6 }} },
+            {{numFaces = 3, result = 2}}))
+        assert.is_true(DiceRollLogic.forcedDiceHonored(
+            { rolls = {{ result = 2, numFaces = 3 }} },
+            {{numFaces = 3, result = 2}}))
+    end)
+
+    it("still detects a mismatched result on a d3 entry", function()
+        assert.is_false(DiceRollLogic.forcedDiceHonored(
+            { rolls = {{ result = 5, numFaces = 6 }} },
+            {{numFaces = 3, result = 2}}))
+    end)
+
+    it("does not extend the d3 equivalence to other face counts", function()
+        assert.is_false(DiceRollLogic.forcedDiceHonored(
+            { rolls = {{ result = 7, numFaces = 20 }} },
+            {{numFaces = 10, result = 7}}))
     end)
 end)

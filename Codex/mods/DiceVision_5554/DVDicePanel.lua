@@ -416,10 +416,16 @@ CreateDiceVisionPanel = function()
         local addStatus
         local testing = false
         local clampBtn, clampLabel
+        local forcedBtn, forcedLabel
+        local cardBtn, cardLabel
         local autoBtn, highBtn, lowBtn, countInput
         local mappingRows
         local addDie, addFrom, addTo
         local rebuildMappingRows
+        local typeRows
+        local typeFrom, typeTo, typeAddStatus
+        local typePanelBtn, typePanelLabel
+        local rebuildTypeRows
 
         local function buildButton(label, onClick)
             return gui.Panel{
@@ -458,6 +464,21 @@ CreateDiceVisionPanel = function()
             clampBtn:SetClass("selected", on)
         end
 
+        local function refreshForcedDice()
+            local on = DiceVision.useForcedDice
+            forcedLabel.text = on and "On" or "Off"
+            forcedBtn:SetClass("selected", on)
+            local card = DiceVision.forcedDiceChatCard
+            cardLabel.text = card and "On" or "Off"
+            cardBtn:SetClass("selected", card)
+        end
+
+        local function refreshTypePanel()
+            local on = DiceVision.rules.typeMappingsOnPanel
+            typePanelLabel.text = on and "On" or "Off"
+            typePanelBtn:SetClass("selected", on)
+        end
+
         local function refreshKeep()
             local sel = DiceVision.rules.diceSelection
             local mode = sel and sel.keep or "auto"
@@ -473,8 +494,11 @@ CreateDiceVisionPanel = function()
         -- declared upvalue, assigned below before this is ever called).
         local function refreshAllRules()
             refreshClamp()
+            refreshForcedDice()
+            refreshTypePanel()
             refreshKeep()
             rebuildMappingRows()
+            rebuildTypeRows()
         end
 
         rebuildMappingRows = function()
@@ -526,6 +550,53 @@ CreateDiceVisionPanel = function()
             mappingRows.children = rows
         end
 
+        -- Mirrors rebuildMappingRows for die-type mappings (e.g. Draw
+        -- Steel's 20-sided d10s recognized as d20 -> treated as d10).
+        rebuildTypeRows = function()
+            local rows = {}
+            for fromType, toType in pairs(DiceVision.rules.typeMappings) do
+                local f = fromType
+                rows[#rows + 1] = gui.Panel{
+                    flow = "horizontal",
+                    width = "100%",
+                    height = "auto",
+                    valign = "center",
+                    gui.Label{
+                        classes = "dvSetInfo",
+                        width = "100%-24",
+                        height = "auto",
+                        text = string.format("%s -> %s", fromType, toType),
+                    },
+                    gui.Panel{
+                        classes = "dvSetRemove",
+                        click = function()
+                            DiceVision.removeTypeMapping(f)
+                            rebuildTypeRows()
+                        end,
+                        gui.Label{
+                            interactable = false,
+                            width = "100%",
+                            height = "100%",
+                            halign = "center",
+                            valign = "center",
+                            color = "white",
+                            fontSize = 11,
+                            text = "x",
+                        },
+                    },
+                }
+            end
+            if #rows == 0 then
+                rows[1] = gui.Label{
+                    classes = "dvSetInfo",
+                    width = "100%",
+                    height = "auto",
+                    text = "(no mappings)",
+                }
+            end
+            typeRows.children = rows
+        end
+
         statusInfo = gui.Label{ classes = "dvSetInfo", width = "100%", height = "auto", text = "" }
         testLine = gui.Label{ classes = "dvSetInfo", width = "100%", height = "auto", text = "" }
 
@@ -540,6 +611,32 @@ CreateDiceVisionPanel = function()
                 refreshClamp()
             end,
             clampLabel,
+        }
+
+        forcedLabel = gui.Label{
+            interactable = false, width = 28, height = "auto",
+            halign = "center", valign = "center", color = "white", fontSize = 11, text = "Off",
+        }
+        forcedBtn = gui.Panel{
+            classes = "dvSetBtn",
+            click = function()
+                DiceVision.setUseForcedDice(not DiceVision.useForcedDice)
+                refreshForcedDice()
+            end,
+            forcedLabel,
+        }
+
+        cardLabel = gui.Label{
+            interactable = false, width = 28, height = "auto",
+            halign = "center", valign = "center", color = "white", fontSize = 11, text = "Off",
+        }
+        cardBtn = gui.Panel{
+            classes = "dvSetBtn",
+            click = function()
+                DiceVision.setForcedDiceChatCard(not DiceVision.forcedDiceChatCard)
+                refreshForcedDice()
+            end,
+            cardLabel,
         }
 
         countInput = gui.Input{
@@ -587,6 +684,42 @@ CreateDiceVisionPanel = function()
         end)
 
         mappingRows = gui.Panel{ flow = "vertical", width = "100%", height = "auto" }
+
+        typePanelLabel = gui.Label{
+            interactable = false, width = 28, height = "auto",
+            halign = "center", valign = "center", color = "white", fontSize = 11, text = "Off",
+        }
+        typePanelBtn = gui.Panel{
+            classes = "dvSetBtn",
+            click = function()
+                DiceVision.setTypeMappingsOnPanel(not DiceVision.rules.typeMappingsOnPanel)
+                refreshTypePanel()
+            end,
+            typePanelLabel,
+        }
+
+        typeFrom = gui.Input{ classes = "dvSetInput", width = 48, lineType = "SingleLine", placeholderText = "from", text = "" }
+        typeTo = gui.Input{ classes = "dvSetInput", width = 48, lineType = "SingleLine", placeholderText = "to", text = "" }
+        typeAddStatus = gui.Label{ classes = "dvSetInfo", width = "100%", height = "auto", text = "" }
+        local typeAddBtn = buildButton("Add", function()
+            -- Same popup-local feedback pattern as the value-mapping Add,
+            -- but failure-specific: the seam returns a reason key.
+            local ok, reason = DiceVision.setTypeMapping(typeFrom.text, typeTo.text)
+            if ok then
+                typeFrom.text = ""
+                typeTo.text = ""
+                typeAddStatus.text = ""
+                rebuildTypeRows()
+            elseif reason == "self" then
+                typeAddStatus.text = "Mapping must change the die type"
+            elseif reason == "target" then
+                typeAddStatus.text = "Target must be d4/d6/d8/d10/d12/d20"
+            else
+                typeAddStatus.text = "Enter two die types (e.g. d20 d10)"
+            end
+        end)
+
+        typeRows = gui.Panel{ flow = "vertical", width = "100%", height = "auto" }
 
         popupPanel = gui.Panel{
             styles = settingsPopupStyles,
@@ -643,6 +776,20 @@ CreateDiceVisionPanel = function()
             },
             testLine,
 
+            -- Forced dice (engine forcedDice path; default on, never
+            -- auto-disables -- turn off manually on unsupported Codex builds)
+            gui.Label{ classes = "dvSetHeader", text = "Forced Dice" },
+            gui.Panel{
+                flow = "horizontal", width = "100%", height = "auto", valign = "center",
+                gui.Label{ classes = "dvSetInfo", width = "100%-60", height = "auto", text = "Use engine forcedDice" },
+                forcedBtn,
+            },
+            gui.Panel{
+                flow = "horizontal", width = "100%", height = "auto", valign = "center", tmargin = 4,
+                gui.Label{ classes = "dvSetInfo", width = "100%-60", height = "auto", text = "DiceVision chat card" },
+                cardBtn,
+            },
+
             -- Dice rules
             gui.Label{ classes = "dvSetHeader", text = "Dice Rules" },
             gui.Panel{
@@ -664,6 +811,21 @@ CreateDiceVisionPanel = function()
                 addDie, addFrom, addTo, addBtn,
             },
             addStatus,
+
+            -- Type mappings (e.g. Draw Steel 20-sided d10s recognized as d20)
+            gui.Label{ classes = "dvSetHeader", text = "Type Mappings" },
+            typeRows,
+            gui.Panel{
+                flow = "horizontal", width = "100%", height = "auto", valign = "center", tmargin = 4,
+                typeFrom, typeTo, typeAddBtn,
+            },
+            typeAddStatus,
+            gui.Panel{
+                flow = "horizontal", width = "100%", height = "auto", valign = "center", tmargin = 4,
+                gui.Label{ classes = "dvSetInfo", width = "100%-60", height = "auto", text = "Apply to panel rolls" },
+                typePanelBtn,
+            },
+
             gui.Panel{
                 flow = "horizontal", width = "100%", height = "auto", tmargin = 4,
                 buildButton("Reset defaults", function()
@@ -678,11 +840,14 @@ CreateDiceVisionPanel = function()
         -- Initial paint from current state.
         refreshStatus()
         refreshClamp()
+        refreshForcedDice()
+        refreshTypePanel()
         refreshKeep()
         if DiceVision.rules.diceSelection then
             countInput.text = tostring(DiceVision.rules.diceSelection.count)
         end
         rebuildMappingRows()
+        rebuildTypeRows()
 
         return popupPanel
     end

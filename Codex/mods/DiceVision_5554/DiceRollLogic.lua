@@ -14,15 +14,20 @@ DiceRollLogic = {}
 
 function DiceRollLogic.extractModifierFromRoll(rollStr)
     if not rollStr then return 0 end
-    local sign, num = rollStr:match("([%+%-])%s*(%d+)")
-    if sign and num then
-        local modifier = tonumber(num) or 0
-        if sign == "-" then
-            modifier = -modifier
+    -- Sum every standalone +N/-N term. The trailing [dD]? capture filters
+    -- out dice groups: in "1d10+2d6+3" the "+2" belongs to "+2d6" and must
+    -- not be read as a modifier.
+    local total = 0
+    for sign, num, dieSuffix in rollStr:gmatch("([%+%-])%s*(%d+)([dD]?)") do
+        if dieSuffix == "" then
+            local modifier = tonumber(num) or 0
+            if sign == "-" then
+                modifier = -modifier
+            end
+            total = total + modifier
         end
-        return modifier
     end
-    return 0
+    return total
 end
 
 function DiceRollLogic.getDiceFaces(dieType)
@@ -109,6 +114,36 @@ end
 -- Dice Rule Processing
 -- ============================================================================
 
+--- Remap physical die types before any other rule runs. Exists for dice
+-- whose shape does not match their faces: MCDM's Draw Steel dice are
+-- 20-sided but numbered 1-10 twice, so the camera (which classifies by
+-- shape) reports them as "d20" while every Draw Steel expression wants
+-- d10s. mappings is { [fromType] = toType }, e.g. { ["d20"] = "d10" }.
+-- Mappings are applied in a SINGLE PASS from the original type -- no
+-- chaining: with {d20="d12", d12="d10"} a d20 becomes a d12, not a d10,
+-- and a d20<->d10 swap cycle is safe.
+-- Remapped dice keep all fields and record originalType, which
+-- tryForcedDicePath reads to explain mapping-caused fallbacks.
+function DiceRollLogic.applyTypeMappings(dice, mappings)
+    if not mappings or next(mappings) == nil then
+        return dice
+    end
+    local result = {}
+    for i, die in ipairs(dice) do
+        local mapped = mappings[die.type]
+        if mapped and mapped ~= die.type then
+            local copy = {}
+            for k, v in pairs(die) do copy[k] = v end
+            copy.type = mapped
+            copy.originalType = die.type
+            result[i] = copy
+        else
+            result[i] = die
+        end
+    end
+    return result
+end
+
 function DiceRollLogic.applyValueMappings(dice, mappings)
     if not mappings or next(mappings) == nil then
         return dice
@@ -118,11 +153,14 @@ function DiceRollLogic.applyValueMappings(dice, mappings)
         local dieType = die.type
         local typeMapping = mappings[dieType] or mappings["*"] or {}
         local newValue = typeMapping[die.value] or die.value
-        result[i] = {
-            type = die.type,
-            value = newValue,
-            originalValue = (newValue ~= die.value) and die.value or nil,
-        }
+        -- Full copy so provenance fields set by earlier stages
+        -- (originalType from applyTypeMappings, originalValue from
+        -- clampOutOfRangeValues) survive this rebuild.
+        local copy = {}
+        for k, v in pairs(die) do copy[k] = v end
+        copy.value = newValue
+        copy.originalValue = (newValue ~= die.value) and die.value or die.originalValue
+        result[i] = copy
     end
     return result
 end
@@ -139,11 +177,13 @@ function DiceRollLogic.clampOutOfRangeValues(dice, isEnabled)
             clamped = 1
             print(string.format("[DiceVision] Clamped %s value %d -> 1 (out of 0-10 range)", die.type, value))
         end
-        result[i] = {
-            type = die.type,
-            value = clamped,
-            originalValue = (clamped ~= value) and value or die.originalValue,
-        }
+        -- Full copy: keep provenance fields from earlier stages (see
+        -- applyValueMappings).
+        local copy = {}
+        for k, v in pairs(die) do copy[k] = v end
+        copy.value = clamped
+        copy.originalValue = (clamped ~= value) and value or die.originalValue
+        result[i] = copy
     end
     return result
 end
@@ -242,6 +282,15 @@ function DiceRollLogic.applyDiceRules(dice, pendingRoll)
     local rules = DiceRollLogic.getEffectiveRules(pendingRoll)
     local processed = dice
     local droppedDice = nil
+    -- Type mappings run FIRST so remapped dice pick up the target type's
+    -- value rules (e.g. a Draw Steel d20-shaped d10 gets the d10 0 -> 10
+    -- mapping). Intercepted rolls (pendingRoll present) apply them by
+    -- default -- the roll expression declares the expected dice. Panel
+    -- rolls are freeform (a physical d20 might really be a d20), so they
+    -- require the explicit opt-in flag.
+    if pendingRoll ~= nil or DiceVision.rules.typeMappingsOnPanel then
+        processed = DiceRollLogic.applyTypeMappings(processed, DiceVision.rules.typeMappings)
+    end
     processed = DiceRollLogic.clampOutOfRangeValues(processed, DiceVision.rules.clampOutOfRange)
     processed = DiceRollLogic.applyValueMappings(processed, rules.valueMappings)
     if rules.diceSelection then
@@ -257,6 +306,198 @@ function DiceRollLogic.applyDiceRules(dice, pendingRoll)
             rules.diceSelection.keep, rules.diceSelection.count, #dice))
     end
     return processed, droppedDice
+end
+
+-- ============================================================================
+-- Forced Dice (engine forcedDice support)
+-- ============================================================================
+
+-- Dice the engine can render/force. d3 is first-class in Codex's Draw Steel
+-- UI (the dice panel tile rolls dmhub.Roll{numFaces = 3} and renders it on
+-- the d6 model showing 1-3, and rollable tables offer 1d3), so numFaces = 3
+-- forcedDice entries match engine d3 dice. d100 is intentionally absent: the
+-- ability roll path never handled percentile, so a d100 expression falls
+-- back to the legacy collapse path.
+local SUPPORTED_FORCED_DICE = {
+    [3] = true,
+    [4] = true, [6] = true, [8] = true, [10] = true, [12] = true, [20] = true,
+}
+
+--- True if dieType names a die the engine can render/force ("d4".."d20").
+-- Used to validate type-mapping TARGETS: mapping to an unforceable type
+-- (d0, d100, ...) would guarantee a permanent forced-path fallback and feed
+-- bogus face counts to the chat card icons.
+function DiceRollLogic.isSupportedDieType(dieType)
+    if type(dieType) ~= "string" then
+        return false
+    end
+    local faces = tonumber(dieType:match("^[dD](%d+)$"))
+    return faces ~= nil and SUPPORTED_FORCED_DICE[faces] == true
+end
+
+--- Extract the ordered, flattened list of dice face counts a roll expression
+-- expects (e.g. "2d10+3 1 bane" -> {10, 10}). Used to build the forcedDice
+-- table passed to dmhub.Roll. Returns nil if the expression is unparseable
+-- or contains unsupported dice, signalling the caller to use the legacy path.
+-- The ParseRoll/RollToString round-trip (strip boons/banes so the dice regex
+-- does not have to know about them) mirrors the official DicePanel.lua
+-- extractDiceList. Divergence from the official (which returns nil when the
+-- APIs are unavailable): we fall back to textually stripping "N edge(s)"/
+-- "N bane(s)". The round-trip is pcall'd and type-checked because a throwing
+-- ParseRoll or a non-string RollToString must degrade to the textual strip,
+-- not crash the roll.
+function DiceRollLogic.extractExpectedDiceList(rollStr, creature)
+    if type(rollStr) ~= "string" then
+        return nil
+    end
+    local cleanRoll = nil
+    if dmhub and dmhub.ParseRoll and dmhub.RollToString then
+        local ok, result = pcall(function()
+            local parsed = dmhub.ParseRoll(rollStr, creature)
+            if parsed == nil then
+                return nil
+            end
+            parsed.boons = nil
+            parsed.banes = nil
+            local s = dmhub.RollToString(parsed)
+            if type(s) == "string" then
+                return s
+            end
+            return nil
+        end)
+        if ok then
+            cleanRoll = result
+        end
+    end
+    if cleanRoll == nil then
+        cleanRoll = rollStr:gsub("%d+%s+edges?", ""):gsub("%d+%s+banes?", "")
+    end
+    local diceList = {}
+    for n, sides in string.gmatch(cleanRoll, "(%d*)[dD](%d+)") do
+        local faces = tonumber(sides)
+        if not SUPPORTED_FORCED_DICE[faces] then
+            return nil
+        end
+        for _ = 1, (tonumber(n) or 1) do
+            diceList[#diceList + 1] = faces
+        end
+    end
+    if #diceList == 0 then
+        return nil
+    end
+    return diceList
+end
+
+-- Strict die-type parse for buildForcedDice. Unlike getDiceFaces (which
+-- defaults unknown types to 10), an unrecognized type must never match a
+-- slot: a garbage entry like type="unknown" would otherwise force a d10.
+local function strictDiceFaces(dieType)
+    if type(dieType) ~= "string" then
+        return nil
+    end
+    return tonumber(dieType:match("^[dD](%d+)$"))
+end
+
+--- Build the forcedDice table for dmhub.Roll from physical dice.
+-- dice: physical dice AFTER clamp/value-mapping rules ({type, value} each).
+-- expectedFaces: array from extractExpectedDiceList.
+-- Each expected face count is matched to an unused physical die of the same
+-- face count (order-independent by type, first-come within a type).
+-- Returns forcedDice, nil on success or nil, reason on failure. Any failure
+-- means the caller should use the legacy path: never partial-force, since the
+-- engine would virtually roll unmatched dice, violating physical-dice intent.
+function DiceRollLogic.buildForcedDice(dice, expectedFaces)
+    if not dice or not expectedFaces then
+        return nil, "missing-input"
+    end
+    if #dice ~= #expectedFaces then
+        return nil, "count-mismatch"
+    end
+    local used = {}
+    local forced = {}
+    for _, faces in ipairs(expectedFaces) do
+        local found = nil
+        for i, die in ipairs(dice) do
+            if not used[i] and strictDiceFaces(die.type) == faces then
+                used[i] = true
+                found = die
+                break
+            end
+        end
+        if not found then
+            return nil, "type-mismatch"
+        end
+        -- Out-of-range and fractional values (e.g. an unmapped d10 "0" or a
+        -- camera misread) would be dropped engine-side with a warning;
+        -- refuse instead so the legacy path handles the roll
+        -- deterministically.
+        if type(found.value) ~= "number"
+            or found.value < 1 or found.value > faces
+            or found.value % 1 ~= 0 then
+            return nil, "out-of-range"
+        end
+        forced[#forced + 1] = { numFaces = faces, result = found.value }
+    end
+    return forced
+end
+
+--- Compare a forcedDice table against the completed roll's rollInfo.rolls
+-- (each entry: {result, numFaces, ...}).
+-- Returns true if every forced entry appears in the rolled dice (subset
+-- match, since game-system mechanics may add dice beyond the forced ones),
+-- false on a confirmed value mismatch, or nil when rollInfo carries no
+-- readable rolls array (cannot verify either way).
+-- NOTE: only the `nil` return now drives behavior (a quiet, non-disabling
+-- "couldn't read dice" note in tryForcedDicePath). The true/false value
+-- comparison is retained for completeness/tests but is no longer acted on:
+-- it produced false negatives under Codex's reroll/power-roll re-fire
+-- ordering and was disabling a working feature.
+function DiceRollLogic.forcedDiceHonored(rollInfo, forcedDice)
+    if rollInfo == nil or type(forcedDice) ~= "table" or #forcedDice == 0 then
+        return nil
+    end
+    -- rollInfo may be a plain table or a userdata-backed type; property
+    -- access on unexpected shapes must not throw inside a complete callback.
+    local ok, rolls = pcall(function() return rollInfo.rolls end)
+    if not ok or type(rolls) ~= "table" or #rolls == 0 then
+        return nil
+    end
+    -- The entry-field reads below are pcall'd too: rolls passed the table
+    -- check, but its ENTRIES may still be userdata proxies whose field
+    -- access throws. A throw means "cannot read the dice" (nil); it must
+    -- never escape into the complete callback that calls this.
+    local okCompare, honored = pcall(function()
+        local used = {}
+        for _, entry in ipairs(forcedDice) do
+            local found = false
+            for i, rolled in ipairs(rolls) do
+                -- d3 equivalence: the engine renders d3 on the d6 model, and
+                -- whether rollInfo.rolls reports such a die as 3- or 6-faced
+                -- is not verifiable from Lua (no official code path forces a
+                -- d3). Accept either face count for a forced d3 entry so this
+                -- check does not spuriously report a d3 roll as unverified.
+                -- (Only the nil return of this function is acted on now; the
+                -- honor check is non-disabling.)
+                local facesMatch = rolled.numFaces == entry.numFaces
+                    or (entry.numFaces == 3 and rolled.numFaces == 6)
+                if not used[i]
+                    and facesMatch
+                    and rolled.result == entry.result then
+                    used[i] = true
+                    found = true
+                    break
+                end
+            end
+            if not found then
+                return false
+            end
+        end
+        return true
+    end)
+    if not okCompare then
+        return nil
+    end
+    return honored
 end
 
 -- ============================================================================

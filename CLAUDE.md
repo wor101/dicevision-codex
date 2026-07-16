@@ -20,7 +20,9 @@ This repository contains a mod that integrates physical dice recognition (DiceVi
 1. User clicks "Roll Dice" in Codex
 2. `RollDialog.OnBeforeRoll` callback intercepts (if DiceVision connected in replace mode)
 3. DiceVision waits for physical dice from API
-4. `handlePendingRoll()` processes result and calls `dmhub.Roll()` with deterministic total
+4. `handlePendingRoll()` processes result and calls `dmhub.Roll()` via one of two paths:
+   - **forcedDice path** (default; toggle with `/dv forceddice`, requires a Codex build where `dmhub.Roll` accepts a `forcedDice` table): passes the intact roll expression plus `forcedDice = {{numFaces, result}, ...}`; the engine computes boons/banes/tier/nats natively. Falls back to legacy per-roll on any failure the mod can detect (unparseable expression, dice count/type mismatch, out-of-range value). On a Codex build without forcedDice support the engine silently ignores the field and rolls virtual dice; the mod never auto-disables (a post-roll dice comparison could not survive Codex's reroll/power-roll re-fire ordering and was false-disabling a working feature), so an old build requires a manual `/dv forceddice off`.
+   - **Legacy collapse path** (fallback, or `/dv forceddice off`): collapses the roll to a deterministic total, pre-computes edge/bane modifiers and tier-shift overrides.
 
 ## Draw Steel Edge/Bane Rules (Critical)
 
@@ -36,12 +38,17 @@ Edges and banes cancel 1-for-1. Apply rules based on net (edges - banes):
 
 **Tier Thresholds**: T1 (1-11), T2 (12-16), T3 (17+)
 
+## Draw Steel Physical Dice
+MCDM's official Draw Steel dice are 20-sided but numbered 1-10 twice, and physical d3s are 6-sided but numbered 1-3 twice. The camera classifies dice by shape, so they arrive as `type = "d20"` / `type = "d6"`. Default die-type mapping rules (`d20 -> d10`, `d6 -> d3`) remap them on intercepted (native-roller) rolls; panel rolls only remap when `/dv rules type panel on` is set.
+
 ## Commands
 - `/dv connect <code>` - Connect to DiceVision session
 - `/dv disconnect` - Disconnect
 - `/dv status` - Show connection status
 - `/dv mode <off|replace>` - Set operation mode
-- `/dv rules <subcommand>` - Configure dice processing rules (map, keep, clamp, clear)
+- `/dv rules <subcommand>` - Configure dice processing rules (map, type, keep, clamp, clear)
+- `/dv forceddice <on|off>` - Use engine forcedDice (default on; never auto-disables, turn off manually on unsupported Codex builds)
+- `/dv forceddice card <on|off>` - DiceVision chat card on the forcedDice path (default off)
 
 ## Coding Rules
 - **ASCII only in Lua files**: Never use non-ASCII / UTF-8 characters (e.g. `->`, `--`, curly quotes) anywhere in `.lua` source files — not in strings, comments, or identifiers. Codex's Lua parser cannot handle multi-byte characters and will fail with misleading syntax errors. Use ASCII equivalents instead (e.g. `->`, `--`, straight quotes).

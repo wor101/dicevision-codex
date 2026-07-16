@@ -8,6 +8,8 @@
 DiceVision = {
     rules = {
         valueMappings = {},
+        typeMappings = {},
+        typeMappingsOnPanel = false,
         diceSelection = nil,
         clampOutOfRange = false,
     },
@@ -51,6 +53,8 @@ _G.resetStubs = function()
     resetPrintLog()
     DiceVision.rules = {
         valueMappings = {},
+        typeMappings = {},
+        typeMappingsOnPanel = false,
         diceSelection = nil,
         clampOutOfRange = false,
     }
@@ -138,6 +142,24 @@ _G.loadDiceVision = function()
 
     -- Load DiceVision.lua
     dofile(projectRoot .. "/Codex/mods/DiceVision_5554/DiceVision.lua")
+
+    -- Snapshot the LOAD-TIME rules before resetDiceVisionState overwrites
+    -- them with its own copy of the defaults. This is the only way a test
+    -- can assert that the module's DEFAULT_RULES copy loop actually ran
+    -- (deleting that loop would otherwise fail zero tests, since every
+    -- test sees the helper's hand-written defaults instead).
+    _G._loadTimeRules = {
+        d20TypeMapping = DiceVision.rules.typeMappings
+            and DiceVision.rules.typeMappings["d20"],
+        d6TypeMapping = DiceVision.rules.typeMappings
+            and DiceVision.rules.typeMappings["d6"],
+        d10ZeroMapping = DiceVision.rules.valueMappings
+            and DiceVision.rules.valueMappings["d10"]
+            and DiceVision.rules.valueMappings["d10"][0],
+        typeMappingsOnPanel = DiceVision.rules.typeMappingsOnPanel,
+        useForcedDice = DiceVision.useForcedDice,
+        forcedDiceChatCard = DiceVision.forcedDiceChatCard,
+    }
 end
 
 -- Resets DiceVision state between tests. Call in before_each().
@@ -163,17 +185,31 @@ _G.resetDiceVisionState = function()
     -- Reset one-time-warning flags so each test starts cleanly.
     DiceVision.warnedMissingSetActiveRoll = nil
 
+    -- Reset forcedDice toggles. NOTE: production defaults useForcedDice
+    -- to TRUE; the fixture baseline is false because most suites drive
+    -- the legacy path and enable the forced path explicitly. The
+    -- production default itself is pinned via _loadTimeRules.
+    DiceVision.useForcedDice = false
+    DiceVision.forcedDiceChatCard = false
+    DiceVision.warnedUnverifiedForcedDice = false
+
     -- Reset panel state
     DiceVision.panelWaitingForRoll = false
     DiceVision.panelPollStartTime = 0
     DiceVision.panelRequestId = nil
     DiceVision.panelTokenId = nil
 
-    -- Reset rules to defaults (d10: 0->10)
+    -- Reset rules to defaults (d10: 0->10, d20 -> d10 and d6 -> d3 type
+    -- mappings)
     DiceVision.rules = {
         valueMappings = {
             ["d10"] = {[0] = 10},
         },
+        typeMappings = {
+            ["d20"] = "d10",
+            ["d6"] = "d3",
+        },
+        typeMappingsOnPanel = false,
         diceSelection = nil,
         clampOutOfRange = false,
     }
@@ -186,6 +222,8 @@ _G.resetDiceVisionState = function()
     -- Reset dmhub runtime stubs
     dmhub.Roll = function(rollArgs) table.insert(_G._dmhubRollLog, rollArgs); return {id = "roll-" .. #_G._dmhubRollLog} end
     dmhub.Time = function() return 0 end
+    dmhub.ParseRoll = function(rollStr, creature) return nil end
+    dmhub.RollToString = nil
 
     -- Clear capture logs
     _G._chatLog = {}

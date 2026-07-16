@@ -504,6 +504,23 @@ describe("DiceVision", function()
             -- dmhub.GetDiceStyling returns {} in tests, so fallback is "#ffffff"
             assert.are.equal("#ffffff", label.color)
         end)
+
+        it("renders a d3 on the d6 icon with the d3 value", function()
+            -- No d3 icon exists; the card mirrors the official panel's
+            -- "d3 uses the d6 model". Only the icon falls back - the
+            -- value label must still show the d3 result.
+            local panel = DiceVisionRollMessage.CreateDiePanel(3, 2)
+            assert.are.equal("ui-icons/d6-filled.png", panel.bgimage)
+            local innerPanel = panel[1]
+            assert.are.equal("ui-icons/d6.png", innerPanel.bgimage)
+            local label = innerPanel[1]
+            assert.are.equal("2", label.text)
+        end)
+
+        it("does not remap icons for other face counts", function()
+            local panel = DiceVisionRollMessage.CreateDiePanel(10, 7)
+            assert.are.equal("ui-icons/d10-filled.png", panel.bgimage)
+        end)
     end)
 
     -- ============================================================================
@@ -1885,6 +1902,49 @@ describe("DiceVision", function()
             assert.are.equal("number", type(captured))
         end)
 
+        it("characterizes table-roll card faces for type-remapped d20s", function()
+            -- The default d20 -> d10 mapping applies to ALL intercepted
+            -- rolls, table rolls included (per the user decision: the
+            -- native roller context opts in by default). Consequence
+            -- pinned here: a REAL d20 showing 14 on a table roll renders
+            -- on a 10-faced card die (value and total stay correct; the
+            -- mapping exists for Draw Steel d20-shaped d10s, whose values
+            -- never exceed 10).
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            DiceVision.pendingRoll = {
+                originalRoll = "1d20",
+                description = "Treasure Table",
+                isTableRoll = true,
+                completeWithResult = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            local rollData = {
+                dice = { { type = "d20", value = 14 } },
+                total = 14,
+            }
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            local card = nil
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "custom" then card = entry.message end
+            end
+            assert.is_not_nil(card)
+            assert.are.equal(10, card.dice[1].faces)
+            assert.are.equal(14, card.dice[1].value)
+            assert.are.equal(14, card.total)
+        end)
+
         it("maps percentile pair '00'+'0' to total 100", function()
             DiceVision.mode = "replace"
             DiceVision.connected = true
@@ -2971,6 +3031,15 @@ describe("DiceVision", function()
             assert.are.equal(true, cbResult.active)
         end)
 
+        it("on success re-arms the once-per-session unverifiable note", function()
+            -- A prior session may have latched warnedUnverifiedForcedDice;
+            -- a fresh connect must re-arm it so the note can fire again.
+            DiceVision.warnedUnverifiedForcedDice = true
+            stubSession("active")
+            DiceVision.connect("ab1")
+            assert.is_false(DiceVision.warnedUnverifiedForcedDice)
+        end)
+
         it("on inactive session clears sessionCode, stays disconnected, fires onResult(false)", function()
             stubSession("inactive")
             local cbSuccess = nil
@@ -3313,6 +3382,1378 @@ describe("DiceVision", function()
             for _, name in ipairs({"RollDialog.OnBeforeRoll", "RollDialog.OnReroll", "RollDialog.OnBeforeTableRoll"}) do
                 assert.is_truthy(string.find(joined, name, 1, true))
             end
+        end)
+    end)
+
+    -- ============================================================================
+    -- forcedDice path (engine forcedDice support behind DiceVision.useForcedDice)
+    -- ============================================================================
+
+    describe("forcedDice path", function()
+        -- Drives a physical-dice delivery through the same polling seam the
+        -- other handlePendingRoll suites use.
+        local function deliverRoll(rollData)
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+        end
+
+        local function setupReplaceMode()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            DiceVision.useForcedDice = true
+        end
+
+        it("passes the intact expression and forcedDice to dmhub.Roll", function()
+            setupReplaceMode()
+            local setActiveRollArg = nil
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Forced Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function(roll) setActiveRollArg = roll end,
+            }
+            DiceVision.waitingForRoll = true
+
+            -- Second die reads 0: the default d10 0->10 mapping must apply
+            -- before the forcedDice table is built.
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 0 },
+                },
+                total = 7,
+            })
+
+            assert.are.equal(1, #_G._dmhubRollLog)
+            local logged = _G._dmhubRollLog[1]
+            assert.are.equal("2d10+5", logged.roll)
+            assert.are.same(
+                {{numFaces = 10, result = 7}, {numFaces = 10, result = 10}},
+                logged.forcedDice)
+            -- Engine owns boons/banes and pacing on this path.
+            assert.is_nil(logged.boons)
+            assert.is_nil(logged.banes)
+            assert.is_nil(logged.instant)
+            -- setActiveRoll must receive the object dmhub.Roll returned
+            -- (the stub returns {id = "roll-N"}), not just be called.
+            assert.is_not_nil(setActiveRollArg)
+            assert.are.equal("roll-1", setActiveRollArg.id)
+        end)
+
+        it("does not zero multitargets boons on targeted rolls", function()
+            setupReplaceMode()
+            local multitargets = {{ boons = 1, banes = 0 }}
+            local props = {
+                multitargets = multitargets,
+                try_get = function(self, key) return rawget(self, key) end,
+            }
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil, properties = props },
+                originalRoll = "2d10+5",
+                description = "Targeted Forced Test",
+                edges = 1,
+                banes = 0,
+                multitargets = multitargets,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            })
+
+            local logged = _G._dmhubRollLog[1]
+            assert.are.equal("2d10+5", logged.roll)
+            -- Legacy zeroed multitargets[1] to avoid double-counting a
+            -- collapsed literal; with the expression intact the engine owns
+            -- the boon math and the mod must not touch it.
+            assert.are.equal(1, multitargets[1].boons)
+            assert.is_nil(logged.boons)
+        end)
+
+        it("suppresses the DiceVision chat card by default", function()
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "No Card Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            })
+
+            for _, entry in ipairs(_G._chatLog) do
+                assert.are_not.equal("custom", entry.type)
+            end
+            -- The complete wrapper is always installed (it carries the
+            -- no-readable-dice note and the optional card send), but with
+            -- the card off it must not send a custom message even after
+            -- the roll completes.
+            local logged = _G._dmhubRollLog[1]
+            assert.is_function(logged.complete)
+            logged.complete({ rolls = {
+                { result = 7, numFaces = 10 },
+                { result = 3, numFaces = 10 },
+            }})
+            for _, entry in ipairs(_G._chatLog) do
+                assert.are_not.equal("custom", entry.type)
+            end
+        end)
+
+        it("sends the chat card from the complete wrapper when enabled", function()
+            setupReplaceMode()
+            DiceVision.forcedDiceChatCard = true
+            local originalCompleteCalled = false
+            DiceVision.pendingRoll = {
+                rollArgs = {
+                    roll = "2d10+5",
+                    creature = nil,
+                    complete = function() originalCompleteCalled = true end,
+                },
+                originalRoll = "2d10+5",
+                description = "Card Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 0 },
+                },
+                total = 7,
+            })
+
+            local logged = _G._dmhubRollLog[1]
+            assert.is_function(logged.complete)
+
+            -- Card only sends once the engine reports the roll complete.
+            local customBefore = 0
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "custom" then customBefore = customBefore + 1 end
+            end
+            assert.are.equal(0, customBefore)
+
+            logged.complete({})
+
+            local card = nil
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "custom" then card = entry.message end
+            end
+            assert.is_not_nil(card)
+            -- Card documents what the camera read: 7 + (0->10) + 5 = 22, T3.
+            assert.are.equal(22, card.total)
+            assert.are.equal(3, card.tier)
+            assert.is_true(originalCompleteCalled)
+        end)
+
+        it("amends re-rolls with the original expression and forcedDice extraFields", function()
+            setupReplaceMode()
+            local amendFormula, amendExtra
+            local props = {
+                try_get = function(self, key) return rawget(self, key) end,
+            }
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil, properties = props },
+                originalRoll = "2d10+5",
+                description = "Forced Re-roll",
+                edges = 2,
+                banes = 0,
+                isReroll = true,
+                amendWithResult = function(formula, extra)
+                    amendFormula = formula
+                    amendExtra = extra
+                end,
+                activeRoll = { id = "roll-1" },
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            })
+
+            assert.are.equal("2d10+5", amendFormula)
+            assert.is_not_nil(amendExtra)
+            assert.are.same(
+                {{numFaces = 10, result = 7}, {numFaces = 10, result = 3}},
+                amendExtra.forcedDice)
+            -- Tier shift is the engine's job now: no overrideTier write even
+            -- for net +2 edges (legacy wrote 3 here).
+            assert.is_nil(props.overrideTier)
+            assert.are.equal(0, #_G._dmhubRollLog)
+        end)
+
+        it("falls back to the legacy path on dice-count mismatch", function()
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10", creature = nil },
+                originalRoll = "2d10",
+                description = "Mismatch Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            -- Three physical dice for a 2d10 expression with no keep rule.
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                    { type = "d10", value = 5 },
+                },
+                total = 15,
+            })
+
+            local logged = _G._dmhubRollLog[1]
+            assert.is_not_nil(logged)
+            -- Legacy collapse: deterministic literal, instant, no forcedDice.
+            assert.are.equal("15", logged.roll)
+            assert.is_true(logged.instant)
+            assert.is_nil(logged.forcedDice)
+            -- The mismatch is player-actionable, so the fallback must be
+            -- announced in chat, not just the debug console.
+            assert.is_true(chatHas("Physical dice do not match the roll"))
+            assert.is_true(chatHas("wrong number of dice"))
+        end)
+
+        it("falls back to the legacy path for unsupported dice", function()
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "1d100", creature = nil },
+                originalRoll = "1d100",
+                description = "Percentile Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                },
+                total = 7,
+            })
+
+            local logged = _G._dmhubRollLog[1]
+            assert.is_not_nil(logged)
+            assert.is_nil(logged.forcedDice)
+            assert.is_true(logged.instant)
+            -- Pin the legacy total too, not just the absence of forcedDice.
+            assert.are.equal("7", logged.roll)
+        end)
+
+        it("uses the engine ParseRoll/RollToString round-trip end to end", function()
+            -- Production Codex has both APIs; the default test stubs force
+            -- the textual fallback everywhere else, so this test wires live
+            -- stubs to exercise the branch users actually run, including
+            -- the creature pass-through.
+            setupReplaceMode()
+            local parseCreature = nil
+            dmhub.ParseRoll = function(rollStr, creature)
+                parseCreature = creature
+                return { boons = 1, banes = 0 }
+            end
+            dmhub.RollToString = function(parsed) return "2d10+5" end
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5 1 edge", creature = "creature-9" },
+                originalRoll = "2d10+5 1 edge",
+                description = "Round-trip Test",
+                edges = 1,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            })
+
+            local logged = _G._dmhubRollLog[1]
+            -- The ORIGINAL expression (with the edge) goes to the engine;
+            -- the round-trip only cleans the dice-extraction input.
+            assert.are.equal("2d10+5 1 edge", logged.roll)
+            assert.are.same(
+                {{numFaces = 10, result = 7}, {numFaces = 10, result = 3}},
+                logged.forcedDice)
+            assert.are.equal("creature-9", parseCreature)
+        end)
+
+        it("remaps Draw Steel d20-shaped d10s via the default type mapping", function()
+            -- Draw Steel's official dice are 20-sided but numbered 1-10
+            -- twice; the camera classifies by shape and reports "d20". The
+            -- default d20 -> d10 type mapping lets them fill the
+            -- expression's d10 slots instead of type-mismatching to legacy.
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Draw Steel Dice Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d20", value = 7 },
+                    { type = "d20", value = 3 },
+                },
+                total = 10,
+            })
+
+            local logged = _G._dmhubRollLog[1]
+            assert.are.equal("2d10+5", logged.roll)
+            assert.are.same(
+                {{numFaces = 10, result = 7}, {numFaces = 10, result = 3}},
+                logged.forcedDice)
+            -- No fallback notice: the forced path handled it.
+            assert.is_false(chatHas("Physical dice do not match the roll"))
+        end)
+
+        it("applies d10 value rules to type-remapped dice", function()
+            -- A remapped Draw Steel die misread as 0 must pick up the d10
+            -- 0 -> 10 value mapping (type mapping runs first).
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10", creature = nil },
+                originalRoll = "2d10",
+                description = "Draw Steel Zero Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d20", value = 7 },
+                    { type = "d20", value = 0 },
+                },
+                total = 7,
+            })
+
+            assert.are.same(
+                {{numFaces = 10, result = 7}, {numFaces = 10, result = 10}},
+                _G._dmhubRollLog[1].forcedDice)
+        end)
+
+        it("remaps 6-sided d3s via the default type mapping", function()
+            -- d3s are 6-sided but numbered 1-3 twice; the camera reports
+            -- them as "d6". The default d6 -> d3 mapping lets them fill a
+            -- d3 expression's slots (the engine takes numFaces = 3 as a
+            -- first-class die and renders it on the d6 model).
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "1d3", creature = nil },
+                originalRoll = "1d3",
+                description = "d3 Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = { { type = "d6", value = 2 } },
+                total = 2,
+            })
+
+            local logged = _G._dmhubRollLog[1]
+            assert.are.equal("1d3", logged.roll)
+            assert.are.same({{numFaces = 3, result = 2}}, logged.forcedDice)
+            assert.is_false(chatHas("Physical dice do not match the roll"))
+        end)
+
+        it("falls back when a remapped d6 reads above 3 on a d3 roll", function()
+            -- A REAL d6 (or a misread) showing 4-6 cannot be a d3 face:
+            -- out-of-range refusal -> announced legacy fallback naming the
+            -- mapping, with the value-correct total.
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "1d3", creature = nil },
+                originalRoll = "1d3",
+                description = "d3 Range Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = { { type = "d6", value = 5 } },
+                total = 5,
+            })
+
+            assert.is_true(chatHas("a die value out of range"))
+            assert.is_true(chatHas("type mapping d6 -> d3 was applied"))
+            local logged = _G._dmhubRollLog[1]
+            assert.are.equal("5", logged.roll)
+            assert.is_nil(logged.forcedDice)
+        end)
+
+        it("characterizes the real-d6 divert under the default mapping", function()
+            -- Same trade-off as the real d20: a REAL d6 rolled for a d6
+            -- expression is remapped to d3 and can never fill the d6 slot
+            -- -> announced legacy fallback naming the mapping.
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "1d6", creature = nil },
+                originalRoll = "1d6",
+                description = "Real d6 Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = { { type = "d6", value = 4 } },
+                total = 4,
+            })
+
+            assert.is_true(chatHas("wrong die types"))
+            assert.is_true(chatHas("type mapping d6 -> d3 was applied"))
+            -- The literal escape hatch at the moment of friction.
+            assert.is_true(chatHas("remove with /dv rules type d6 clear"))
+            local logged = _G._dmhubRollLog[1]
+            assert.are.equal("4", logged.roll)
+            assert.is_true(logged.instant)
+            assert.is_nil(logged.forcedDice)
+        end)
+
+        it("characterizes the real-d20 divert under the default mapping", function()
+            -- Ships enabled by default: a REAL d20 rolled for a d20
+            -- expression is remapped to d10 by the default rule, so it can
+            -- never fill the d20 slot -> announced legacy fallback. The
+            -- notice must NAME the mapping -- the user rolled exactly the
+            -- right die, and 'wrong die types' alone would be a permanent,
+            -- undiagnosable puzzle.
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "1d20", creature = nil },
+                originalRoll = "1d20",
+                description = "Real d20 Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = { { type = "d20", value = 14 } },
+                total = 14,
+            })
+
+            assert.is_true(chatHas("wrong die types"))
+            assert.is_true(chatHas("type mapping d20 -> d10 was applied"))
+            assert.is_true(chatHas("remove with /dv rules type d20 clear"))
+            -- Legacy fallback keeps the roll value-correct.
+            local logged = _G._dmhubRollLog[1]
+            assert.are.equal("14", logged.roll)
+            assert.is_true(logged.instant)
+            assert.is_nil(logged.forcedDice)
+        end)
+
+        it("remapped dice survive keep-surplus reconciliation", function()
+            setupReplaceMode()
+            DiceVision.rules.diceSelection = { keep = "highest", count = 2 }
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Remap Keep Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d20", value = 7 },
+                    { type = "d20", value = 3 },
+                    { type = "d20", value = 5 },
+                },
+                total = 15,
+            })
+
+            -- All three remap to d10, keep-highest 2 selects 7 and 5, and
+            -- the remapped type must survive selection into the slots.
+            assert.are.same(
+                {{numFaces = 10, result = 7}, {numFaces = 10, result = 5}},
+                _G._dmhubRollLog[1].forcedDice)
+        end)
+
+        it("clamps a remapped misread before forcing when clamp is on", function()
+            setupReplaceMode()
+            DiceVision.rules.clampOutOfRange = true
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10", creature = nil },
+                originalRoll = "2d10",
+                description = "Remap Clamp Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            -- A d20-shaped die misread as 15: remap to d10, clamp 15 -> 1.
+            deliverRoll({
+                dice = {
+                    { type = "d20", value = 15 },
+                    { type = "d20", value = 7 },
+                },
+                total = 22,
+            })
+
+            assert.are.same(
+                {{numFaces = 10, result = 1}, {numFaces = 10, result = 7}},
+                _G._dmhubRollLog[1].forcedDice)
+        end)
+
+        it("falls back on a remapped out-of-range value when clamp is off", function()
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10", creature = nil },
+                originalRoll = "2d10",
+                description = "Remap Out-of-range Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d20", value = 15 },
+                    { type = "d20", value = 7 },
+                },
+                total = 22,
+            })
+
+            assert.is_true(chatHas("a die value out of range"))
+            assert.is_true(chatHas("type mapping d20 -> d10 was applied"))
+            local logged = _G._dmhubRollLog[1]
+            assert.are.equal("22", logged.roll)
+            assert.is_nil(logged.forcedDice)
+        end)
+
+        it("amends re-rolls with remapped Draw Steel dice", function()
+            setupReplaceMode()
+            local amendFormula, amendExtra
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Remap Re-roll Test",
+                edges = 0,
+                banes = 0,
+                isReroll = true,
+                amendWithResult = function(formula, extra)
+                    amendFormula = formula
+                    amendExtra = extra
+                end,
+                activeRoll = { id = "roll-1" },
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d20", value = 7 },
+                    { type = "d20", value = 3 },
+                },
+                total = 10,
+            })
+
+            assert.are.equal("2d10+5", amendFormula)
+            assert.are.same(
+                {{numFaces = 10, result = 7}, {numFaces = 10, result = 3}},
+                amendExtra.forcedDice)
+        end)
+
+        it("characterizes the d10-centric clamp on non-d10 dice", function()
+            -- Known limitation pinned on purpose: the clamp rule is defined
+            -- as "outside 0-10 -> 1", so with clamp enabled a legitimate
+            -- physical d20 result above 10 is clamped to 1 and forced as
+            -- such. Users rolling non-d10 dice should keep clamp off.
+            setupReplaceMode()
+            DiceVision.rules.clampOutOfRange = true
+            -- Clear the default d20 -> d10 type mapping: this test is about
+            -- clamp on a REAL d20, which the mapping would divert to a d10
+            -- slot mismatch.
+            DiceVision.rules.typeMappings = {}
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "1d20", creature = nil },
+                originalRoll = "1d20",
+                description = "Clamp d20 Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d20", value = 15 },
+                },
+                total = 15,
+            })
+
+            local logged = _G._dmhubRollLog[1]
+            assert.are.same({{numFaces = 20, result = 1}}, logged.forcedDice)
+        end)
+
+        it("uses the legacy path when the toggle is off", function()
+            setupReplaceMode()
+            DiceVision.useForcedDice = false
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Toggle Off Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            })
+
+            local logged = _G._dmhubRollLog[1]
+            assert.are.equal("15", logged.roll)
+            assert.is_true(logged.instant)
+            assert.is_nil(logged.forcedDice)
+        end)
+
+        it("never disables on a value mismatch, even as the FIRST completion", function()
+            -- The reported power-roll bug: Codex's doRerollAmend re-fires
+            -- the initial wrapper with the reroll's rollInfo BEFORE the
+            -- initial completion, so the wrapper's first completion is a
+            -- value mismatch against the initial forced set -- yet the dice
+            -- were honored. Verification must NEVER disable or warn on a
+            -- value mismatch.
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Mismatch First Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            })
+
+            local complete = _G._dmhubRollLog[1].complete
+            assert.is_function(complete)
+            -- First completion carries different (reroll) values.
+            complete({ rolls = {
+                { result = 2, numFaces = 10 },
+                { result = 9, numFaces = 10 },
+            }})
+
+            assert.is_true(DiceVision.useForcedDice)
+            assert.is_false(chatHas("WARNING"))
+            assert.is_false(chatHas("ignored forcedDice"))
+            -- A mismatch (false) must not trigger the no-readable-dice note
+            -- either: honored == nil is its ONLY trigger. If it fired here
+            -- it would fire on every power-roll reroll re-fire, and setting
+            -- the latch would also suppress the legitimate note later.
+            assert.is_false(chatHas("couldn't read the dice"))
+            assert.is_false(DiceVision.warnedUnverifiedForcedDice)
+        end)
+
+        it("does not fall back to legacy when setActiveRoll throws", function()
+            -- dmhub.Roll has already fired by the time setActiveRoll runs.
+            -- An error escaping to handlePendingRoll's pcall would trigger
+            -- the legacy fallback and roll a SECOND time on top of the
+            -- forced roll; it must be contained inside tryForcedDicePath.
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "setActiveRoll Throw Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() error("wiring failure") end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            })
+
+            -- Exactly one engine roll, and it is the forced one (intact
+            -- expression + forcedDice), not a legacy collapsed total.
+            assert.are.equal(1, #_G._dmhubRollLog)
+            assert.are.equal("2d10+5", _G._dmhubRollLog[1].roll)
+            assert.is_not_nil(_G._dmhubRollLog[1].forcedDice)
+        end)
+
+        it("notes once (quietly) when the engine returns no readable dice, without disabling", function()
+            -- honored == nil (no readable rolls) is the only signal we keep.
+            -- It never disables; it says so once per session. Rerolls yield
+            -- a value mismatch (false), never nil, so they do not trigger it.
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Unreadable Dice Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            })
+
+            _G._dmhubRollLog[1].complete({})
+
+            assert.is_true(DiceVision.useForcedDice)
+            assert.is_true(chatHas("couldn't read the dice results"))
+            assert.is_false(chatHas("WARNING"))
+            assert.is_true(DiceVision.warnedUnverifiedForcedDice)
+
+            -- Second unreadable completion: no repeat note.
+            local before = #_G._chatLog
+            _G._dmhubRollLog[1].complete({})
+            local newNotes = 0
+            for i = before + 1, #_G._chatLog do
+                if _G._chatLog[i].type == "send"
+                    and string.find(_G._chatLog[i].message, "couldn't read the dice", 1, true) then
+                    newNotes = newNotes + 1
+                end
+            end
+            assert.are.equal(0, newNotes)
+        end)
+
+        it("stays enabled when the engine honored forcedDice", function()
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Supported Build Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            })
+
+            _G._dmhubRollLog[1].complete({ rolls = {
+                { result = 7, numFaces = 10 },
+                { result = 3, numFaces = 10 },
+            }})
+
+            assert.is_true(DiceVision.useForcedDice)
+            assert.is_false(chatHas("WARNING"))
+        end)
+
+        it("re-enabling re-arms the once-per-session unverifiable note", function()
+            DiceVision.warnedUnverifiedForcedDice = true
+            DiceVision.useForcedDice = false
+            Commands.dv("forceddice on")
+            assert.is_true(DiceVision.useForcedDice)
+            assert.is_false(DiceVision.warnedUnverifiedForcedDice)
+        end)
+
+        it("still calls the original complete when the card send throws", function()
+            setupReplaceMode()
+            DiceVision.forcedDiceChatCard = true
+            local originalCompleteCalled = false
+            DiceVision.pendingRoll = {
+                rollArgs = {
+                    roll = "2d10+5",
+                    creature = nil,
+                    complete = function() originalCompleteCalled = true end,
+                },
+                originalRoll = "2d10+5",
+                description = "Card Throw Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            })
+
+            local originalSendCustom = chat.SendCustom
+            chat.SendCustom = function() error("card render failed") end
+            _G._dmhubRollLog[1].complete({ rolls = {
+                { result = 7, numFaces = 10 },
+                { result = 3, numFaces = 10 },
+            }})
+            chat.SendCustom = originalSendCustom
+
+            -- The cosmetic card must never block Codex's completion logic.
+            assert.is_true(originalCompleteCalled)
+        end)
+
+        it("falls back to the legacy reroll amend when forced construction fails on a reroll", function()
+            setupReplaceMode()
+            local amendFormula, amendExtra
+            local props = {
+                try_get = function(self, key) return rawget(self, key) end,
+            }
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil, properties = props },
+                originalRoll = "2d10+5",
+                description = "Reroll Fallback Test",
+                edges = 2,
+                banes = 0,
+                isReroll = true,
+                amendWithResult = function(formula, extra)
+                    amendFormula = formula
+                    amendExtra = extra
+                end,
+                activeRoll = { id = "roll-1" },
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            -- Three physical dice for a 2d10 expression: count mismatch on
+            -- the forced path must land in the LEGACY reroll amend, which
+            -- collapses to a literal and writes overrideTier for net +2.
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                    { type = "d10", value = 5 },
+                },
+                total = 15,
+            })
+
+            -- Legacy: diceSum 15 + modifier 5 = 20, net +2 edges = no flat
+            -- mod, tier 3 override.
+            assert.are.equal("20", amendFormula)
+            assert.is_nil(amendExtra)
+            assert.are.equal(3, props.overrideTier)
+            assert.are.equal(0, #_G._dmhubRollLog)
+        end)
+
+        it("reconciles surplus dice with an explicit keep rule before forcing", function()
+            setupReplaceMode()
+            DiceVision.rules.diceSelection = { keep = "highest", count = 2 }
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Surplus Keep Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                    { type = "d10", value = 5 },
+                },
+                total = 15,
+            })
+
+            local logged = _G._dmhubRollLog[1]
+            assert.are.equal("2d10+5", logged.roll)
+            -- Keep-highest 2 of {7,3,5} -> the two highest values forced.
+            assert.are.same(
+                {{numFaces = 10, result = 7}, {numFaces = 10, result = 5}},
+                logged.forcedDice)
+        end)
+
+        it("falls back to legacy when the keep rule cannot reconcile the count", function()
+            setupReplaceMode()
+            DiceVision.rules.diceSelection = { keep = "highest", count = 1 }
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10", creature = nil },
+                originalRoll = "2d10",
+                description = "Keep Mismatch Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            -- Keep 1 of 3 leaves 1 die for a 2-die expression: still a count
+            -- mismatch, so legacy must take over.
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                    { type = "d10", value = 5 },
+                },
+                total = 15,
+            })
+
+            local logged = _G._dmhubRollLog[1]
+            assert.is_nil(logged.forcedDice)
+            assert.is_true(logged.instant)
+        end)
+
+        it("falls back to legacy when the forced path raises an error", function()
+            -- The pcall at the fork is what keeps the "a roll is never
+            -- lost" contract true even for unanticipated errors (and stops
+            -- isPolling from being stranded true).
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Error Fallback Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            local originalExtract = DiceRollLogic.extractExpectedDiceList
+            DiceRollLogic.extractExpectedDiceList = function() error("boom") end
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            })
+            DiceRollLogic.extractExpectedDiceList = originalExtract
+
+            local logged = _G._dmhubRollLog[1]
+            assert.is_not_nil(logged)
+            assert.are.equal("15", logged.roll)
+            assert.is_true(logged.instant)
+            assert.is_nil(logged.forcedDice)
+            assert.is_false(DiceVision.isPolling)
+        end)
+    end)
+
+    -- ============================================================================
+    -- /dv forceddice command and status
+    -- ============================================================================
+
+    describe("/dv forceddice command", function()
+        it("enables forcedDice with on", function()
+            Commands.dv("forceddice on")
+            assert.is_true(DiceVision.useForcedDice)
+            assert.is_true(chatHas("forcedDice enabled"))
+        end)
+
+        it("disables forcedDice with off", function()
+            DiceVision.useForcedDice = true
+            Commands.dv("forceddice off")
+            assert.is_false(DiceVision.useForcedDice)
+            assert.is_true(chatHas("forcedDice disabled"))
+        end)
+
+        it("enables the chat card with card on", function()
+            Commands.dv("forceddice card on")
+            assert.is_true(DiceVision.forcedDiceChatCard)
+            assert.is_true(chatHas("chat card enabled"))
+        end)
+
+        it("disables the chat card with card off", function()
+            DiceVision.forcedDiceChatCard = true
+            Commands.dv("forceddice card off")
+            assert.is_false(DiceVision.forcedDiceChatCard)
+            assert.is_true(chatHas("chat card disabled"))
+        end)
+
+        it("shows usage for card without on/off", function()
+            Commands.dv("forceddice card")
+            assert.is_true(chatHas("/dv forceddice card <on|off>"))
+        end)
+
+        it("shows current state and usage with no argument", function()
+            Commands.dv("forceddice")
+            assert.is_true(chatHas("forcedDice: off"))
+            assert.is_true(chatHas("/dv forceddice <on|off>"))
+        end)
+
+        it("reports state through getStatus and /dv status", function()
+            DiceVision.useForcedDice = true
+            local s = DiceVision.getStatus()
+            assert.is_true(s.useForcedDice)
+            assert.is_false(s.forcedDiceChatCard)
+
+            Commands.dv("status")
+            assert.is_true(chatHas("ForcedDice: on (chat card: off)"))
+        end)
+    end)
+
+    -- ============================================================================
+    -- Type mapping rules (/dv rules type) and panel gating
+    -- ============================================================================
+
+    describe("type mapping rules", function()
+        it("panel rolls keep the reported die type by default", function()
+            local rollData = {
+                dice = {
+                    { type = "d20", value = 7 },
+                    { type = "d20", value = 3 },
+                },
+                total = 10,
+            }
+            DiceVision.postRollToChat(rollData)
+            local msg = _G._chatLog[1].message
+            -- Message dice carry face counts; unmapped d20s stay 20-faced.
+            assert.are.equal(20, msg.dice[1].faces)
+            assert.are.equal(20, msg.dice[2].faces)
+        end)
+
+        it("panel rolls remap when typeMappingsOnPanel is enabled", function()
+            DiceVision.rules.typeMappingsOnPanel = true
+            local rollData = {
+                dice = {
+                    { type = "d20", value = 7 },
+                },
+                total = 7,
+            }
+            DiceVision.postRollToChat(rollData)
+            local msg = _G._chatLog[1].message
+            assert.are.equal(10, msg.dice[1].faces)
+        end)
+
+        it("adds a type mapping via /dv rules type", function()
+            DiceVision.rules.typeMappings = {}
+            Commands.dv("rules type d12 d6")
+            assert.are.equal("d6", DiceVision.rules.typeMappings["d12"])
+            assert.is_true(chatHas("Type mapping: d12 -> d6"))
+        end)
+
+        it("normalizes case and rejects invalid or self mappings", function()
+            Commands.dv("rules type D12 D6")
+            assert.are.equal("d6", DiceVision.rules.typeMappings["d12"])
+
+            assert.is_false(DiceVision.setTypeMapping("d10", "d10"))
+            assert.is_false(DiceVision.setTypeMapping("banana", "d10"))
+            assert.is_false(DiceVision.setTypeMapping("d10", nil))
+        end)
+
+        it("removes a type mapping via /dv rules type <from> clear", function()
+            Commands.dv("rules type d20 clear")
+            assert.is_nil(DiceVision.rules.typeMappings["d20"])
+            assert.is_true(chatHas("Removed type mapping for d20"))
+
+            _G._chatLog = {}
+            Commands.dv("rules type d20 clear")
+            assert.is_true(chatHas("No type mapping for d20"))
+        end)
+
+        it("toggles panel application via /dv rules type panel", function()
+            Commands.dv("rules type panel on")
+            assert.is_true(DiceVision.rules.typeMappingsOnPanel)
+            Commands.dv("rules type panel off")
+            assert.is_false(DiceVision.rules.typeMappingsOnPanel)
+            _G._chatLog = {}
+            Commands.dv("rules type panel bogus")
+            assert.is_true(chatHas("/dv rules type panel <on|off>"))
+        end)
+
+        it("shows type mappings in /dv rules show and bare /dv rules type", function()
+            Commands.dv("rules show")
+            assert.is_true(chatHas("Type mappings:"))
+            assert.is_true(chatHas("d20 -> d10"))
+            assert.is_true(chatHas("Type mappings on panel rolls: disabled"))
+
+            _G._chatLog = {}
+            Commands.dv("rules type")
+            assert.is_true(chatHas("d20 -> d10"))
+            assert.is_true(chatHas("Panel rolls: off"))
+        end)
+
+        it("rules clear restores the default type mappings; clear all empties them", function()
+            DiceVision.rules.typeMappings = {}
+            DiceVision.rules.typeMappingsOnPanel = true
+            Commands.dv("rules clear")
+            assert.are.equal("d10", DiceVision.rules.typeMappings["d20"])
+            assert.are.equal("d3", DiceVision.rules.typeMappings["d6"])
+            assert.is_false(DiceVision.rules.typeMappingsOnPanel)
+
+            Commands.dv("rules clear all")
+            assert.is_nil(next(DiceVision.rules.typeMappings))
+        end)
+
+        it("module load applied DEFAULT_RULES (not just the test helper)", function()
+            -- resetDiceVisionState overwrites rules with the helper's copy
+            -- of the defaults before every test; this asserts the snapshot
+            -- taken at module-load time, so deleting the DEFAULT_RULES
+            -- copy loop in DiceVision.lua fails a test.
+            assert.is_not_nil(_G._loadTimeRules)
+            assert.are.equal("d10", _G._loadTimeRules.d20TypeMapping)
+            assert.are.equal("d3", _G._loadTimeRules.d6TypeMapping)
+            assert.are.equal(10, _G._loadTimeRules.d10ZeroMapping)
+            assert.is_false(_G._loadTimeRules.typeMappingsOnPanel)
+            -- Production defaults: forcedDice path ON (never auto-disables;
+            -- unsupported builds need a manual /dv forceddice off), chat
+            -- card off.
+            assert.is_true(_G._loadTimeRules.useForcedDice)
+            assert.is_false(_G._loadTimeRules.forcedDiceChatCard)
+        end)
+
+        it("drives a roll at the exact shipped defaults", function()
+            -- Behavior pin for the production configuration, not just the
+            -- value snapshot: restore the load-time toggles over the
+            -- fixture baseline (rules already match the shipped defaults,
+            -- asserted here) and confirm a Draw Steel roll takes the
+            -- forced path.
+            assert.are.equal("d10", DiceVision.rules.typeMappings["d20"])
+            assert.are.equal("d3", DiceVision.rules.typeMappings["d6"])
+            assert.are.equal(10, DiceVision.rules.valueMappings["d10"][0])
+            DiceVision.useForcedDice = _G._loadTimeRules.useForcedDice
+            DiceVision.forcedDiceChatCard = _G._loadTimeRules.forcedDiceChatCard
+            assert.is_true(DiceVision.useForcedDice)
+
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Shipped Defaults Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            local rollData = {
+                dice = {
+                    { type = "d20", value = 7 },
+                    { type = "d20", value = 0 },
+                },
+                total = 7,
+            }
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            local logged = _G._dmhubRollLog[1]
+            assert.are.equal("2d10+5", logged.roll)
+            assert.are.same(
+                {{numFaces = 10, result = 7}, {numFaces = 10, result = 10}},
+                logged.forcedDice)
+        end)
+
+        it("legacy path card shows faces 3 for a remapped d3", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            DiceVision.useForcedDice = false
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "1d3", creature = nil },
+                originalRoll = "1d3",
+                description = "Legacy d3 Card Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            local rollData = {
+                dice = { { type = "d6", value = 2 } },
+                total = 2,
+            }
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            local logged = _G._dmhubRollLog[1]
+            assert.are.equal("2", logged.roll)
+            logged.complete({})
+            local card = nil
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "custom" then card = entry.message end
+            end
+            assert.is_not_nil(card)
+            assert.are.equal(3, card.dice[1].faces)
+            assert.are.equal(2, card.dice[1].value)
+        end)
+
+        it("legacy path remaps Draw Steel dice end to end", function()
+            -- The legacy collapse path stays reachable (/dv forceddice off,
+            -- or a per-roll fallback when forced construction fails), and
+            -- the remap + d10 0->10 value rule must fire there too.
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            DiceVision.useForcedDice = false
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10", creature = nil },
+                originalRoll = "2d10",
+                description = "Legacy Draw Steel Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            local rollData = {
+                dice = {
+                    { type = "d20", value = 7 },
+                    { type = "d20", value = 0 },
+                },
+                total = 7,
+            }
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            -- Legacy collapse: 7 + (0 -> 10) = 17.
+            local logged = _G._dmhubRollLog[1]
+            assert.are.equal("17", logged.roll)
+            assert.is_true(logged.instant)
+
+            -- The card (sent from the legacy complete wrapper) must show
+            -- remapped d10 faces and the mapped value.
+            logged.complete({})
+            local card = nil
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "custom" then card = entry.message end
+            end
+            assert.is_not_nil(card)
+            assert.are.equal(10, card.dice[1].faces)
+            assert.are.equal(10, card.dice[2].faces)
+            assert.are.equal(10, card.dice[2].value)
+            assert.are.equal(17, card.total)
+        end)
+
+        it("panel remapping cannot cause percentile misdetection", function()
+            -- Percentile detection takes the RAW dice; even with the panel
+            -- opt-in enabled, a Draw Steel pair reading 00 + 7 must post a
+            -- standard roll, not a bogus d100. Guard for the ordering: if
+            -- someone moves the remap ahead of detection, the remapped
+            -- d10s with these rawValues would misdetect.
+            DiceVision.rules.typeMappingsOnPanel = true
+            local rollData = {
+                dice = {
+                    { type = "d20", value = 0, rawValue = "00" },
+                    { type = "d20", value = 7, rawValue = "7" },
+                },
+                total = 7,
+            }
+            DiceVision.postRollToChat(rollData)
+            local msg = _G._chatLog[1].message
+            assert.are_not.equal("Percentile Roll (d100)", msg.description)
+            -- Standard panel message with remapped faces + 0->10 value rule.
+            assert.are.equal(10, msg.dice[1].faces)
+            assert.are.equal(10, msg.dice[1].value)
+            assert.are.equal(10, msg.dice[2].faces)
+            assert.are.equal(17, msg.total)
+        end)
+
+        it("keywords are case-insensitive in /dv rules type", function()
+            Commands.dv("rules type PANEL on")
+            assert.is_true(DiceVision.rules.typeMappingsOnPanel)
+
+            Commands.dv("rules type D20 CLEAR")
+            assert.is_nil(DiceVision.rules.typeMappings["d20"])
+        end)
+
+        it("rejects unforceable mapping targets", function()
+            Commands.dv("rules type d10 d100")
+            assert.is_nil(DiceVision.rules.typeMappings["d10"])
+            assert.is_true(chatHas("Target die must be one of"))
+        end)
+
+        it("setTypeMapping returns failure-specific reasons for the popup", function()
+            local ok, reason = DiceVision.setTypeMapping("d10", "d10")
+            assert.is_false(ok)
+            assert.are.equal("self", reason)
+
+            ok, reason = DiceVision.setTypeMapping("d10", "d100")
+            assert.is_false(ok)
+            assert.are.equal("target", reason)
+
+            ok, reason = DiceVision.setTypeMapping("banana", "d10")
+            assert.is_false(ok)
+            assert.are.equal("usage", reason)
         end)
     end)
 end)

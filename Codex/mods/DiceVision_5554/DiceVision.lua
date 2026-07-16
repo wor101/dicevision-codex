@@ -30,6 +30,24 @@ DiceVision = {
     -- Request ID for polling
     currentRequestId = nil,
 
+    -- forcedDice engine feature (requires a Codex build where dmhub.Roll
+    -- accepts a forcedDice table). Defaults ON: support cannot be
+    -- feature-detected from Lua, and the mod NEVER auto-disables (a
+    -- post-roll dice comparison could not survive Codex's reroll/power-roll
+    -- re-fire ordering and was false-disabling a working feature). On an
+    -- unsupported build the user turns it off manually with
+    -- /dv forceddice off. In-memory only, like mode/rules
+    -- (dmhub.SetSettingValue is the option if persistence is ever wanted).
+    useForcedDice = true,
+    forcedDiceChatCard = false,  -- custom chat card off by default on the forcedDice path
+    -- One-per-session notice flag. forcedDice verification is best-effort
+    -- and NON-disabling (see tryForcedDicePath): the only signal is a single
+    -- quiet note when the engine returns no readable dice at all (honor
+    -- check == nil). We never auto-disable, because a post-roll dice
+    -- comparison cannot survive the reroll/power-roll re-fire ordering and
+    -- was false-disabling a working feature.
+    warnedUnverifiedForcedDice = false,
+
     -- Panel-specific state (independent of replace mode)
     panelWaitingForRoll = false,
     panelPollStartTime = 0,
@@ -42,17 +60,31 @@ local DEFAULT_RULES = {
     valueMappings = {
         ["d10"] = {[0] = 10},  -- Standard d10: 0 reads as 10
     },
+    -- Physical dice whose shape does not match their faces: Draw Steel's
+    -- official dice are 20-sided but numbered 1-10 twice, and d3s are
+    -- 6-sided but numbered 1-3 twice. The camera classifies by shape and
+    -- reports them as "d20"/"d6". Intercepted rolls remap them by default;
+    -- panel rolls only when typeMappingsOnPanel is enabled.
+    typeMappings = {
+        ["d20"] = "d10",
+        ["d6"] = "d3",
+    },
     diceSelection = nil,
 }
 
 -- Dice rule configuration (initialized from defaults)
 DiceVision.rules = {
     valueMappings = {},
+    typeMappings = {},
+    typeMappingsOnPanel = false,
     diceSelection = nil,
     clampOutOfRange = false,
 }
 
 -- Apply default rules on load
+for fromType, toType in pairs(DEFAULT_RULES.typeMappings) do
+    DiceVision.rules.typeMappings[fromType] = toType
+end
 for dieType, mappings in pairs(DEFAULT_RULES.valueMappings) do
     DiceVision.rules.valueMappings[dieType] = {}
     for from, to in pairs(mappings) do
@@ -114,12 +146,15 @@ function DiceVisionRollMessage.CreateDiePanel(faces, value, dropped)
     local sat = dropped and 0.3 or 0.7
     local bright = dropped and 0.2 or 0.4
     local labelColor = dropped and "#888888" or (diceStyle.color or "#ffffff")
+    -- No d3 icon exists; render d3 on the d6 icon, matching the official
+    -- Draw Steel dice panel ("d3 uses the d6 model").
+    local imageFaces = (faces == 3) and 6 or faces
     return gui.Panel{
         width = 40,
         height = 40,
         halign = "center",
         valign = "center",
-        bgimage = string.format("ui-icons/d%d-filled.png", faces),
+        bgimage = string.format("ui-icons/d%d-filled.png", imageFaces),
         bgcolor = diceStyle.bgcolor or "#2d5a2d",
         saturation = sat,
         brightness = bright,
@@ -127,7 +162,7 @@ function DiceVisionRollMessage.CreateDiePanel(faces, value, dropped)
             interactable = false,
             width = "100%",
             height = "100%",
-            bgimage = string.format("ui-icons/d%d.png", faces),
+            bgimage = string.format("ui-icons/d%d.png", imageFaces),
             bgcolor = diceStyle.trimcolor or "#4a9a4a",
             gui.Label{
                 interactable = false,
@@ -615,6 +650,223 @@ local function showWaitingDialog()
     chat.Send("[DiceVision] Waiting for physical dice roll...")
 end
 
+-- forcedDice path: hand the INTACT roll expression plus the physical dice
+-- faces to the engine via dmhub.Roll's forcedDice table. The virtual dice
+-- tumble and land showing the physical values, and the engine computes
+-- boons/banes, tier shifts, and nat detection natively -- no collapsing to
+-- a numeric literal, no boons/banes splitting, no overrideTier injection.
+-- Returns true if it handled the roll; false means the caller must fall
+-- through to the legacy collapse path.
+--
+-- Failure contract: every failure DETECTED here (unparseable expression,
+-- count/type mismatch, out-of-range value) returns false so the legacy path
+-- takes over. The one failure the mod cannot detect up front is a Codex
+-- build without forcedDice support: the engine silently ignores the field
+-- and rolls VIRTUAL dice, discarding the physical values. The complete
+-- wrapper below never auto-disables (a value comparison cannot survive the
+-- reroll/power-roll re-fire ordering); it only chats a single quiet note if
+-- the engine returns no readable dice at all. An unsupported build is turned
+-- off manually with /dv forceddice off.
+-- User-facing wording for buildForcedDice refusal reasons. These are
+-- actionable (the player rolled the wrong physical dice), so the fallback
+-- is announced in chat rather than only in the debug console.
+local FORCED_DICE_REASON_TEXT = {
+    ["count-mismatch"] = "wrong number of dice",
+    ["type-mismatch"] = "wrong die types",
+    ["out-of-range"] = "a die value out of range",
+    ["missing-input"] = "missing dice data",
+}
+
+local function tryForcedDicePath(pendingRoll, rollData, diceForMessage, diceSum)
+    local rollStr = pendingRoll.originalRoll
+    local rollArgs = pendingRoll.rollArgs
+    local creature = rollArgs and rollArgs.creature
+    local expected = DiceRollLogic.extractExpectedDiceList(rollStr, creature)
+    if not expected then
+        print(string.format("DV: forcedDice - cannot extract dice from '%s'; using legacy path",
+            tostring(rollStr)))
+        chat.Send("[DiceVision] Cannot read the dice in this roll; using the legacy result")
+        return false
+    end
+
+    -- Type mappings first (always here -- this is an intercepted-roll
+    -- context): Draw Steel's 20-sided d10s arrive from the camera as "d20"
+    -- and would otherwise type-mismatch against the expression's d10 slots.
+    -- Then clamp and value mappings (camera misreads, d10 0 -> 10).
+    -- Keep-selection is deliberately NOT applied in general: the expression's
+    -- own keep semantics run engine-side against the forced faces. Exception:
+    -- an explicit user keep rule may reconcile a surplus (user rolled more
+    -- dice than the expression needs).
+    local processed = DiceRollLogic.applyTypeMappings(rollData.dice, DiceVision.rules.typeMappings)
+    processed = DiceRollLogic.clampOutOfRangeValues(processed, DiceVision.rules.clampOutOfRange)
+    processed = DiceRollLogic.applyValueMappings(processed, DiceVision.rules.valueMappings)
+    if #processed > #expected and DiceVision.rules.diceSelection then
+        processed = DiceRollLogic.applyDiceSelection(processed, DiceVision.rules.diceSelection)
+    end
+
+    -- Collect which type mappings actually fired (originalType is set by
+    -- applyTypeMappings and carried through the later stages). Failures
+    -- must name them: a REAL d20 rolled for a d20 expression is diverted
+    -- by the default d20 -> d10 mapping, and blaming "wrong die types"
+    -- without naming the mapping would leave the user a permanent,
+    -- undiagnosable puzzle.
+    local appliedMappings = {}
+    local appliedFrom = {}
+    do
+        local seen = {}
+        for _, die in ipairs(processed) do
+            if die.originalType then
+                local text = die.originalType .. " -> " .. die.type
+                if not seen[text] then
+                    seen[text] = true
+                    appliedMappings[#appliedMappings + 1] = text
+                    appliedFrom[#appliedFrom + 1] = die.originalType
+                end
+            end
+        end
+        table.sort(appliedMappings)
+    end
+
+    local forcedDice, reason = DiceRollLogic.buildForcedDice(processed, expected)
+    if not forcedDice then
+        print(string.format("DV: forcedDice - %s; using legacy path", tostring(reason)))
+        local notice = string.format("[DiceVision] Physical dice do not match the roll (%s); using the legacy result",
+            FORCED_DICE_REASON_TEXT[reason] or tostring(reason))
+        if #appliedMappings > 0 then
+            -- Give the one-line escape hatch at the moment of friction:
+            -- e.g. a REAL d6 rolled for a d6 expression can only be fixed
+            -- by clearing the default d6 -> d3 mapping.
+            local remedy = "see /dv rules type"
+            if #appliedFrom == 1 then
+                remedy = string.format("remove with /dv rules type %s clear", appliedFrom[1])
+            end
+            notice = notice .. string.format(" (note: type mapping %s was applied; %s)",
+                table.concat(appliedMappings, ", "), remedy)
+        end
+        chat.Send(notice)
+        return false
+    end
+    if #appliedMappings > 0 then
+        -- Success-path breadcrumb so "why did my roll show X" reports are
+        -- diagnosable: same-face fills after a remap are silent by design.
+        print(string.format("DV: forcedDice - type mappings applied: %s",
+            table.concat(appliedMappings, ", ")))
+    end
+
+    -- Optional chat card (off by default on this path: the engine's native
+    -- roll message shows the real dice). The card documents what the camera
+    -- read -- the rule-processed dice plus the static modifier -- so its
+    -- total is computed from diceSum, the same pipeline that produced the
+    -- displayed dice (dropped dice excluded, matching the visuals). The
+    -- engine message remains the authoritative result including boons.
+    local visualMessage = nil
+    if DiceVision.forcedDiceChatCard then
+        local modifier = DiceRollLogic.extractModifierFromRoll(rollStr)
+        local cardTotal = (diceSum or 0) + modifier
+        local tokenid = rollArgs and rollArgs.tokenid
+        if not tokenid and creature then
+            tokenid = dmhub.LookupTokenId(creature)
+        end
+        visualMessage = DiceVisionRollMessage.new{
+            description = pendingRoll.description or "Physical Dice",
+            dice = diceForMessage,
+            modifier = modifier,
+            total = cardTotal,
+            tier = DiceRollLogic.calculateTier(cardTotal),
+            tokenid = tokenid,
+            rollSource = "ability",
+        }
+    end
+
+    -- Re-roll: amend the ORIGINAL expression with forcedDice as extraFields.
+    -- doRerollAmend (dialog Lua in DSRollDialog.lua / EmbeddedRollDialog.lua)
+    -- merges them into amendArgs before Amend(); requires a dialog version
+    -- whose doRerollAmend accepts extraFields. We install no complete wrapper
+    -- here: doRerollAmend reuses (and re-fires) the INITIAL roll's complete
+    -- wrapper. That re-fire is harmless now because the wrapper never
+    -- disables -- re-checking the reroll's dice against the initial forced
+    -- set (which for a power roll fires before the initial completion) was
+    -- the false-positive that disabled a working feature.
+    if pendingRoll.isReroll and pendingRoll.amendWithResult then
+        if pendingRoll.setActiveRoll and pendingRoll.activeRoll then
+            pendingRoll.setActiveRoll(pendingRoll.activeRoll)
+        elseif pendingRoll.setActiveRoll or pendingRoll.activeRoll then
+            print("DV: forcedDice - reroll missing setActiveRoll or activeRoll; amend may target a stale roll")
+        end
+        pendingRoll.amendWithResult(rollStr, { forcedDice = forcedDice })
+        -- Card only after the amend went through: a failed amend must not
+        -- leave a DiceVision card asserting a result the engine never
+        -- recorded. The card is cosmetic; never let it break the roll.
+        if visualMessage then
+            pcall(chat.SendCustom, visualMessage)
+        end
+        return true
+    end
+
+    if not rollArgs then
+        return false
+    end
+
+    -- Same shallow-copy discipline as the legacy path (see the longer note
+    -- there): copy the TOP LEVEL only, so `properties` rides along as the
+    -- same reference -- never clone the properties table itself (registered
+    -- game type; a clone strips its try_get metamethods).
+    local copy = {}
+    for k, v in pairs(rollArgs) do copy[k] = v end
+    copy.roll = rollStr
+    copy.forcedDice = forcedDice
+    -- Deliberately NOT set here (unlike legacy): boons/banes fields,
+    -- multitargets[1] zeroing, and instant=true. The engine and dialog own
+    -- them now, matching the official DicePanel.lua handlers. The dice
+    -- tumbling to the physical faces is the intended UX; if the tumble
+    -- delay proves annoying, `copy.instant = true` is the one-line change.
+
+    -- Wrap complete for a BEST-EFFORT, NON-DISABLING check that the engine
+    -- returned readable dice. We deliberately never auto-disable forcedDice
+    -- here: a post-roll dice comparison cannot survive Codex's reroll/power-
+    -- roll machinery. doRerollAmend reuses and RE-FIRES this same wrapper
+    -- with the reroll's rollInfo (and for a power roll the reroll fires
+    -- BEFORE the initial completion), while the closure still holds the
+    -- initial forced set -- so comparing values produced false negatives
+    -- that disabled a WORKING feature. The only signal we keep is a single
+    -- quiet note when the engine returns NO readable dice at all
+    -- (forcedDiceHonored == nil); rerolls yield a value mismatch (false),
+    -- not nil, so they never trigger it. The card send is pcall'd and
+    -- precedes originalComplete so a cosmetic failure can never block
+    -- Codex's own completion logic.
+    local originalComplete = rollArgs.complete
+    copy.complete = function(rollInfo)
+        if not DiceVision.warnedUnverifiedForcedDice
+            and DiceRollLogic.forcedDiceHonored(rollInfo, forcedDice) == nil then
+            -- No readable dice on rollInfo -- we cannot confirm the physical
+            -- values were used. Say it once, quietly; never disable.
+            DiceVision.warnedUnverifiedForcedDice = true
+            chat.Send("[DiceVision] Note: couldn't read the dice results to confirm your physical values were used. If your physical dice are being ignored, run /dv forceddice off.")
+        end
+        if visualMessage then
+            pcall(chat.SendCustom, visualMessage)
+        end
+        if originalComplete then
+            originalComplete(rollInfo)
+        end
+    end
+
+    local roll = dmhub.Roll(copy)
+    -- Wire the dialog's g_activeRoll or re-rolls silently break. pcall'd:
+    -- the engine roll above has already fired, so an error here must not
+    -- escape to handlePendingRoll's pcall and trigger the legacy fallback
+    -- -- that would roll a SECOND time on top of the roll just fired.
+    if pendingRoll.setActiveRoll and roll then
+        local ok, err = pcall(pendingRoll.setActiveRoll, roll)
+        if not ok then
+            print("DV: forcedDice - setActiveRoll failed: " .. tostring(err) .. "; re-rolls may not amend correctly")
+        end
+    elseif not roll then
+        print("DV: forcedDice - dmhub.Roll returned nil; re-rolls may not amend correctly")
+    end
+    return true
+end
+
 handlePendingRoll = function(rollData)
     if not DiceVision.pendingRoll then
         return false
@@ -664,6 +916,21 @@ handlePendingRoll = function(rollData)
         chat.SendCustom(visualMessage)
         pendingRoll.completeWithResult(total)
         return true
+    end
+
+    -- forcedDice path: engine computes boons/banes/tier/nats natively from
+    -- the intact expression. Any detected failure -- including an uncaught
+    -- error, hence the pcall -- falls through to the legacy collapse path so
+    -- a roll is never lost. Without the pcall, an error escaping here would
+    -- also strand isPolling=true and wedge every subsequent roll.
+    if DiceVision.useForcedDice then
+        local ok, handled = pcall(tryForcedDicePath, pendingRoll, rollData, diceForMessage, diceSum)
+        if ok and handled then
+            return true
+        end
+        if not ok then
+            print("DV: forcedDice - error: " .. tostring(handled) .. "; using legacy path")
+        end
     end
 
     local edges = pendingRoll.edges or 0
@@ -985,6 +1252,9 @@ DiceVision.connect = function(code, onResult)
     validateSession(function(success, result)
         if success then
             DiceVision.mode = "replace"
+            -- Fresh session: re-arm the once-per-session "no readable dice"
+            -- note so it can surface again this session.
+            DiceVision.warnedUnverifiedForcedDice = false
             -- Probe-and-register: warn the user about any hook the Codex
             -- install is missing so they know which roll types will fall
             -- back to virtual dice.
@@ -1039,6 +1309,52 @@ DiceVision.removeValueMapping = function(dieType, fromVal)
     return true
 end
 
+-- Returns true on success, or false plus a reason key ("usage" | "target" |
+-- "self") so the popup can show a failure-specific message; the chat line
+-- already carries the specific reason for command users.
+DiceVision.setTypeMapping = function(fromType, toType)
+    fromType = type(fromType) == "string" and fromType:lower() or nil
+    toType = type(toType) == "string" and toType:lower() or nil
+    if not (fromType and toType
+        and fromType:match("^d%d+$") and toType:match("^d%d+$")) then
+        chat.Send("[DiceVision] Usage: /dv rules type <fromDie> <toDie> (e.g. /dv rules type d20 d10)")
+        return false, "usage"
+    end
+    -- The target must be a die the engine can render/force; mapping to
+    -- d0/d100/etc. would guarantee a permanent forced-path fallback.
+    if not DiceRollLogic.isSupportedDieType(toType) then
+        chat.Send("[DiceVision] Target die must be one of: d4, d6, d8, d10, d12, d20")
+        return false, "target"
+    end
+    if fromType == toType then
+        chat.Send("[DiceVision] Type mapping must change the die type")
+        return false, "self"
+    end
+    DiceVision.rules.typeMappings[fromType] = toType
+    chat.Send(string.format("[DiceVision] Type mapping: %s -> %s", fromType, toType))
+    return true
+end
+
+DiceVision.removeTypeMapping = function(fromType)
+    fromType = type(fromType) == "string" and fromType:lower() or nil
+    if not (fromType and DiceVision.rules.typeMappings[fromType]) then
+        return false
+    end
+    DiceVision.rules.typeMappings[fromType] = nil
+    chat.Send(string.format("[DiceVision] Removed type mapping for %s", fromType))
+    return true
+end
+
+DiceVision.setTypeMappingsOnPanel = function(enabled)
+    DiceVision.rules.typeMappingsOnPanel = enabled and true or false
+    if DiceVision.rules.typeMappingsOnPanel then
+        chat.Send("[DiceVision] Type mappings will apply to panel rolls")
+    else
+        chat.Send("[DiceVision] Type mappings will not apply to panel rolls (intercepted rolls only)")
+    end
+    return DiceVision.rules.typeMappingsOnPanel
+end
+
 DiceVision.setDiceSelection = function(mode, count)
     count = tonumber(count)
     if mode == "auto" or mode == "clear" then
@@ -1063,11 +1379,44 @@ DiceVision.setClampOutOfRange = function(enabled)
     return DiceVision.rules.clampOutOfRange
 end
 
+DiceVision.setUseForcedDice = function(enabled)
+    DiceVision.useForcedDice = enabled and true or false
+    if DiceVision.useForcedDice then
+        -- Re-arm the once-per-session "no readable dice" note so a re-enable
+        -- (e.g. after manually turning it off, or after updating Codex) can
+        -- surface it again this session.
+        DiceVision.warnedUnverifiedForcedDice = false
+        chat.Send("[DiceVision] forcedDice enabled. Requires a Codex build with dmhub.Roll forcedDice support: an older build ignores it and rolls VIRTUAL dice. DiceVision does not auto-disable -- if your physical dice are being ignored, run /dv forceddice off.")
+    else
+        chat.Send("[DiceVision] forcedDice disabled (legacy deterministic-total path)")
+    end
+    return DiceVision.useForcedDice
+end
+
+DiceVision.setForcedDiceChatCard = function(enabled)
+    DiceVision.forcedDiceChatCard = enabled and true or false
+    if DiceVision.forcedDiceChatCard then
+        chat.Send("[DiceVision] forcedDice chat card enabled")
+    else
+        chat.Send("[DiceVision] forcedDice chat card disabled")
+    end
+    return DiceVision.forcedDiceChatCard
+end
+
 DiceVision.clearRules = function(clearAll)
-    DiceVision.rules = {valueMappings = {}, diceSelection = nil, clampOutOfRange = false}
+    DiceVision.rules = {
+        valueMappings = {},
+        typeMappings = {},
+        typeMappingsOnPanel = false,
+        diceSelection = nil,
+        clampOutOfRange = false,
+    }
     if clearAll then
         chat.Send("[DiceVision] All rules cleared (including defaults)")
     else
+        for fromType, toType in pairs(DEFAULT_RULES.typeMappings) do
+            DiceVision.rules.typeMappings[fromType] = toType
+        end
         for dieType, mappings in pairs(DEFAULT_RULES.valueMappings) do
             DiceVision.rules.valueMappings[dieType] = {}
             for from, to in pairs(mappings) do
@@ -1129,6 +1478,8 @@ DiceVision.getStatus = function()
         sessionCode = DiceVision.sessionCode,
         mode = DiceVision.mode,
         isPolling = DiceVision.isPolling,
+        useForcedDice = DiceVision.useForcedDice,
+        forcedDiceChatCard = DiceVision.forcedDiceChatCard,
         hooks = hooks,
         missing = missing,
     }
@@ -1156,11 +1507,13 @@ Commands.dv = function(args)
         local s = DiceVision.getStatus()
         local function yn(v) return v and "YES" or "NO" end
         local status = string.format(
-            "[DiceVision] Status:\n  Connected: %s\n  Session: %s\n  Mode: %s\n  Polling: %s\n  Hooks: ability=%s, reroll=%s, table=%s",
+            "[DiceVision] Status:\n  Connected: %s\n  Session: %s\n  Mode: %s\n  Polling: %s\n  ForcedDice: %s (chat card: %s)\n  Hooks: ability=%s, reroll=%s, table=%s",
             tostring(s.connected),
             s.sessionCode or "none",
             s.mode,
             tostring(s.isPolling),
+            s.useForcedDice and "on" or "off",
+            s.forcedDiceChatCard and "on" or "off",
             yn(s.hooks.ability), yn(s.hooks.reroll), yn(s.hooks["table"])
         )
         if #s.missing > 0 then
@@ -1188,6 +1541,28 @@ Commands.dv = function(args)
             -- /dv connect.
             DiceVision.setMode(newMode, newMode == "replace")
             chat.Send("[DiceVision] Mode changed: " .. oldMode .. " -> " .. newMode)
+        end
+
+    elseif subcommand == "forceddice" then
+        local arg2 = parts[2]
+        if arg2 == "on" then
+            DiceVision.setUseForcedDice(true)
+        elseif arg2 == "off" then
+            DiceVision.setUseForcedDice(false)
+        elseif arg2 == "card" then
+            local arg3 = parts[3]
+            if arg3 == "on" then
+                DiceVision.setForcedDiceChatCard(true)
+            elseif arg3 == "off" then
+                DiceVision.setForcedDiceChatCard(false)
+            else
+                chat.Send("[DiceVision] Usage: /dv forceddice card <on|off>")
+            end
+        else
+            chat.Send(string.format(
+                "[DiceVision] forcedDice: %s (chat card: %s)\n  Usage: /dv forceddice <on|off>  |  /dv forceddice card <on|off>",
+                DiceVision.useForcedDice and "on" or "off",
+                DiceVision.forcedDiceChatCard and "on" or "off"))
         end
 
     elseif subcommand == "test" then
@@ -1245,6 +1620,15 @@ Commands.dv = function(args)
             else
                 msg = msg .. "  Value mappings: none\n"
             end
+            if next(DiceVision.rules.typeMappings) then
+                msg = msg .. "  Type mappings:\n"
+                for fromType, toType in pairs(DiceVision.rules.typeMappings) do
+                    msg = msg .. string.format("    %s -> %s\n", fromType, toType)
+                end
+            else
+                msg = msg .. "  Type mappings: none\n"
+            end
+            msg = msg .. "  Type mappings on panel rolls: " .. (DiceVision.rules.typeMappingsOnPanel and "enabled" or "disabled") .. "\n"
             msg = msg .. "  Dice selection: " .. (DiceVision.rules.diceSelection and
                 string.format("keep %s %d", DiceVision.rules.diceSelection.keep, DiceVision.rules.diceSelection.count) or "auto-detect") .. "\n"
             msg = msg .. "  Out-of-range clamping: " .. (DiceVision.rules.clampOutOfRange and "enabled" or "disabled")
@@ -1252,6 +1636,41 @@ Commands.dv = function(args)
 
         elseif action == "map" then
             DiceVision.setValueMapping(parts[3], parts[4], parts[5])
+
+        elseif action == "type" then
+            -- Lowercase both args: die types are case-normalized by the
+            -- setters anyway, and this makes the keywords (panel/clear/
+            -- on/off) case-insensitive instead of chatting the wrong
+            -- usage line for e.g. "/dv rules type PANEL on".
+            local arg3 = parts[3] and parts[3]:lower()
+            local arg4 = parts[4] and parts[4]:lower()
+            if arg3 == "panel" then
+                if arg4 == "on" then
+                    DiceVision.setTypeMappingsOnPanel(true)
+                elseif arg4 == "off" then
+                    DiceVision.setTypeMappingsOnPanel(false)
+                else
+                    chat.Send("[DiceVision] Usage: /dv rules type panel <on|off>")
+                end
+            elseif arg3 and arg4 == "clear" then
+                if not DiceVision.removeTypeMapping(arg3) then
+                    chat.Send(string.format("[DiceVision] No type mapping for %s", tostring(arg3)))
+                end
+            elseif arg3 and arg4 then
+                DiceVision.setTypeMapping(arg3, arg4)
+            else
+                local msg = "[DiceVision] Type mappings"
+                if next(DiceVision.rules.typeMappings) then
+                    for fromType, toType in pairs(DiceVision.rules.typeMappings) do
+                        msg = msg .. string.format("\n  %s -> %s", fromType, toType)
+                    end
+                else
+                    msg = msg .. ": none"
+                end
+                msg = msg .. "\n  Panel rolls: " .. (DiceVision.rules.typeMappingsOnPanel and "on" or "off")
+                msg = msg .. "\nUsage: /dv rules type <from> <to> | /dv rules type <from> clear | /dv rules type panel <on|off>"
+                chat.Send(msg)
+            end
 
         elseif action == "keep" then
             DiceVision.setDiceSelection(parts[3], parts[4])
@@ -1275,6 +1694,9 @@ Commands.dv = function(args)
 [DiceVision] Rule commands:
   /dv rules show                    - Show current rules
   /dv rules map <die> <from> <to>   - Map die value (e.g., /dv rules map d10 0 10)
+  /dv rules type <from> <to>        - Map die type (e.g., /dv rules type d20 d10)
+  /dv rules type <from> clear       - Remove a die type mapping
+  /dv rules type panel <on|off>     - Apply type mappings to panel rolls
   /dv rules keep <mode> <count>     - Keep highest/lowest N dice
   /dv rules keep auto               - Auto-detect from roll context
   /dv rules clamp <on|off>          - Clamp values outside 0-10 to 1
@@ -1292,6 +1714,8 @@ Commands.dv = function(args)
   /dv mode <mode>     - Set mode: off or replace
   /dv refresh         - Re-probe Codex hooks (use after Codex update)
   /dv rules           - Configure dice processing rules
+  /dv forceddice <on|off>      - Use engine forcedDice (default on; never auto-disables, turn off manually on unsupported builds)
+  /dv forceddice card <on|off> - DiceVision chat card on forcedDice path
   /dv test            - Test API connection
 
 Modes:
