@@ -4556,8 +4556,8 @@ describe("DiceVision", function()
         it("keeps percentile pairs on the chat card display", function()
             setupPanelWaiting()
 
-            -- String values so the conversion seam preserves rawValue
-            -- ("30" tens + "7" units), matching real API payloads.
+            -- String values match real API payloads (and rawValue strings
+            -- are what make a "00" tens die distinguishable from "0").
             deliverRoll({
                 dice = {
                     { type = "d10", value = "30" },
@@ -4657,6 +4657,47 @@ describe("DiceVision", function()
             assert.are.same({{numFaces = 20, result = 15}}, logged.forcedDice)
         end)
 
+        it("does not warn when the completed dice match the forced values", function()
+            setupPanelWaiting()
+
+            deliverRoll({
+                dice = { { type = "d10", value = 7 } },
+                total = 7,
+            })
+
+            local logged = _G._dmhubRollLog[1]
+            logged.complete({ rolls = { { result = 7, numFaces = 10 } } })
+            -- honored == nil is the note's ONLY trigger: readable dice,
+            -- matching or not, must never chat the "run /dv forceddice off"
+            -- note or latch the once-per-session flag.
+            assert.is_false(DiceVision.warnedUnverifiedForcedDice)
+            assert.is_false(chatHas("couldn't read the dice results"))
+        end)
+
+        it("leaves a console breadcrumb on a confirmed value mismatch", function()
+            setupPanelWaiting()
+
+            deliverRoll({
+                dice = { { type = "d10", value = 7 } },
+                total = 7,
+            })
+
+            local logged = _G._dmhubRollLog[1]
+            logged.complete({ rolls = { { result = 3, numFaces = 10 } } })
+            -- A mismatch (old build ignoring forcedDice, or a reroll) gets
+            -- a print-level trace but no chat noise and never disables.
+            assert.is_true(DiceVision.useForcedDice)
+            assert.is_false(DiceVision.warnedUnverifiedForcedDice)
+            assert.is_false(chatHas("couldn't read the dice results"))
+            local found = false
+            for _, line in ipairs(_G._printLog) do
+                if line:find("did not match the forced values", 1, true) then
+                    found = true
+                end
+            end
+            assert.is_true(found)
+        end)
+
         it("notes once when the engine returns no readable dice", function()
             setupPanelWaiting()
 
@@ -4696,6 +4737,69 @@ describe("DiceVision", function()
             assert.are.equal(1, #customChatEntries())
             assert.is_false(DiceVision.panelWaitingForRoll)
             assert.is_false(DiceVision.isPolling)
+        end)
+
+        it("falls back to the chat card when dmhub.Roll itself throws", function()
+            -- Late failure: everything up to the engine call succeeded.
+            -- The dispatch pcall must still deliver the fallback card with
+            -- its token attribution intact (panelTokenId clears only after
+            -- dmhub.Roll returns).
+            setupPanelWaiting()
+
+            dmhub.Roll = function() error("engine boom") end
+            deliverRoll({
+                dice = { { type = "d10", value = 7 } },
+                total = 7,
+            })
+
+            assert.are.equal(0, #_G._dmhubRollLog)
+            local cards = customChatEntries()
+            assert.are.equal(1, #cards)
+            assert.are.equal("token-1", cards[1].message.tokenid)
+            assert.is_false(DiceVision.panelWaitingForRoll)
+            assert.is_false(DiceVision.isPolling)
+        end)
+
+        it("logs instead of claiming success when dmhub.Roll returns nil", function()
+            setupPanelWaiting()
+
+            dmhub.Roll = function(rollArgs)
+                table.insert(_G._dmhubRollLog, rollArgs)
+                return nil
+            end
+            deliverRoll({
+                dice = { { type = "d10", value = 7 } },
+                total = 7,
+            })
+
+            -- Still handled (a nil return does not prove the engine did not
+            -- roll), so no fallback card -- but the log must not claim
+            -- success.
+            assert.are.equal(0, #customChatEntries())
+            local success, breadcrumb = false, false
+            for _, line in ipairs(_G._printLog) do
+                if line:find("rolled '1d10'", 1, true) then success = true end
+                if line:find("returned nil", 1, true) then breadcrumb = true end
+            end
+            assert.is_false(success)
+            assert.is_true(breadcrumb)
+        end)
+
+        it("forces the clamped value when the clamp rule is on", function()
+            -- Pins that clamping runs BEFORE the forcedDice snapshot: a d10
+            -- misread of 11 is clamped to 1 and forced as 1, not refused as
+            -- out-of-range.
+            setupPanelWaiting()
+            DiceVision.rules.clampOutOfRange = true
+
+            deliverRoll({
+                dice = { { type = "d10", value = 11 } },
+                total = 11,
+            })
+
+            local logged = _G._dmhubRollLog[1]
+            assert.are.equal("1d10", logged.roll)
+            assert.are.same({{numFaces = 10, result = 1}}, logged.forcedDice)
         end)
     end)
 

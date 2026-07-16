@@ -891,8 +891,9 @@ end
 -- game effect), same as the chat-card-only display it upgrades.
 -- Returns true if it handled the roll; false means the caller must fall back
 -- to postRollToChat. Failures are print-only: unlike the intercepted path
--- there is no expression the dice can mismatch, and the fallback card still
--- shows the result.
+-- there is no expression the dice can mismatch, and even an out-of-range
+-- refusal (the one failure the intercepted path chat-announces) is harmless
+-- here because the fallback card still shows the result.
 tryPanelForcedDice = function(rollData)
     -- Percentile pairs stay on the chat-card display: d100 is not a
     -- supported forcedDice type and postRollToChat has dedicated rendering.
@@ -935,29 +936,51 @@ tryPanelForcedDice = function(rollData)
         }
     end
 
-    dmhub.Roll{
+    local roll = dmhub.Roll{
         roll = expr,
         forcedDice = forcedDice,
         description = "Physical Dice Roll",
         tokenid = tokenid,
         -- Same best-effort, NON-DISABLING check as tryForcedDicePath: one
         -- quiet note per session when the engine returns no readable dice.
-        -- The card send is pcall'd so a cosmetic failure never surfaces.
+        -- The card send is pcall'd so a cosmetic failure cannot block the
+        -- engine's completion.
         complete = function(rollInfo)
-            if not DiceVision.warnedUnverifiedForcedDice
-                and DiceRollLogic.forcedDiceHonored(rollInfo, forcedDice) == nil then
+            local honored = DiceRollLogic.forcedDiceHonored(rollInfo, forcedDice)
+            if honored == false then
+                -- Unlike the intercepted path, this wrapper is never
+                -- re-fired by doRerollAmend with a stale forced set, so a
+                -- first-completion mismatch is a real signal: an old build
+                -- ignoring forcedDice, or the user rerolling the engine's
+                -- chat entry. Console breadcrumb only -- a chat warning
+                -- could still false-positive on that reroll.
+                print("DV: panel forcedDice - completed dice did not match the forced values (old build ignoring forcedDice, or a reroll)")
+            end
+            if not DiceVision.warnedUnverifiedForcedDice and honored == nil then
                 DiceVision.warnedUnverifiedForcedDice = true
                 chat.Send("[DiceVision] Note: couldn't read the dice results to confirm your physical values were used. If your physical dice are being ignored, run /dv forceddice off.")
             end
             if visualMessage then
-                pcall(chat.SendCustom, visualMessage)
+                local ok, err = pcall(chat.SendCustom, visualMessage)
+                if not ok then
+                    print("DV: panel forcedDice - card send failed: " .. tostring(err))
+                end
             end
         end,
     }
+    -- An error thrown by dmhub.Roll itself AFTER the engine accepted the
+    -- roll would escape to the dispatch pcall and add a fallback card on
+    -- top of the engine entry (cosmetic double display; the roll has no
+    -- game effect). Everything below is throw-free, so that call is the
+    -- whole window.
     -- Clear only on success: a fallback to postRollToChat must keep the
     -- token attribution for its card.
     DiceVision.panelTokenId = nil
-    print(string.format("DV: panel forcedDice - rolled '%s' with %d forced dice", expr, #forcedDice))
+    if roll then
+        print(string.format("DV: panel forcedDice - rolled '%s' with %d forced dice", expr, #forcedDice))
+    else
+        print(string.format("DV: panel forcedDice - dmhub.Roll returned nil for '%s'; the roll may not have been posted", expr))
+    end
     return true
 end
 
