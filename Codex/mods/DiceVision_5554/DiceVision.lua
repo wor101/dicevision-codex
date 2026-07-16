@@ -32,12 +32,12 @@ DiceVision = {
 
     -- forcedDice engine feature (requires a Codex build where dmhub.Roll
     -- accepts a forcedDice table). Defaults ON: support cannot be
-    -- feature-detected from Lua, but the post-roll verification in
-    -- tryForcedDicePath auto-disables it with a chat warning on an
-    -- unsupported build, so typically one roll per session is affected
-    -- there (the disable is in-memory and re-arms on reload).
-    -- In-memory only, like mode/rules (dmhub.SetSettingValue is the
-    -- option if persistence is ever wanted).
+    -- feature-detected from Lua, and the mod NEVER auto-disables (a
+    -- post-roll dice comparison could not survive Codex's reroll/power-roll
+    -- re-fire ordering and was false-disabling a working feature). On an
+    -- unsupported build the user turns it off manually with
+    -- /dv forceddice off. In-memory only, like mode/rules
+    -- (dmhub.SetSettingValue is the option if persistence is ever wanted).
     useForcedDice = true,
     forcedDiceChatCard = false,  -- custom chat card off by default on the forcedDice path
     -- One-per-session notice flag. forcedDice verification is best-effort
@@ -663,10 +663,10 @@ end
 -- takes over. The one failure the mod cannot detect up front is a Codex
 -- build without forcedDice support: the engine silently ignores the field
 -- and rolls VIRTUAL dice, discarding the physical values. The complete
--- wrapper below verifies the rolled faces post-roll and auto-disables the
--- toggle with a loud chat warning on a confirmed mismatch, so typically
--- one roll per session is affected (the in-memory disable re-arms on
--- reload).
+-- wrapper below never auto-disables (a value comparison cannot survive the
+-- reroll/power-roll re-fire ordering); it only chats a single quiet note if
+-- the engine returns no readable dice at all. An unsupported build is turned
+-- off manually with /dv forceddice off.
 -- User-facing wording for buildForcedDice refusal reasons. These are
 -- actionable (the player rolled the wrong physical dice), so the fallback
 -- is announced in chat rather than only in the debug console.
@@ -1246,8 +1246,8 @@ DiceVision.connect = function(code, onResult)
     validateSession(function(success, result)
         if success then
             DiceVision.mode = "replace"
-            -- Fresh session: re-arm the once-per-session unverifiable note.
-            -- (Per-roll honor verification re-arms on its own each roll.)
+            -- Fresh session: re-arm the once-per-session "no readable dice"
+            -- note so it can surface again this session.
             DiceVision.warnedUnverifiedForcedDice = false
             -- Probe-and-register: warn the user about any hook the Codex
             -- install is missing so they know which roll types will fall
@@ -1376,10 +1376,9 @@ end
 DiceVision.setUseForcedDice = function(enabled)
     DiceVision.useForcedDice = enabled and true or false
     if DiceVision.useForcedDice then
-        -- Re-arm the once-per-session unverifiable note so a re-enable (e.g.
-        -- after an unsupported-build auto-disable, or after updating Codex)
-        -- can surface it again. Per-roll honor checks re-arm on their own
-        -- (each roll's wrapper verifies independently).
+        -- Re-arm the once-per-session "no readable dice" note so a re-enable
+        -- (e.g. after manually turning it off, or after updating Codex) can
+        -- surface it again this session.
         DiceVision.warnedUnverifiedForcedDice = false
         chat.Send("[DiceVision] forcedDice enabled. Requires a Codex build with dmhub.Roll forcedDice support: an older build ignores it and rolls VIRTUAL dice. DiceVision does not auto-disable -- if your physical dice are being ignored, run /dv forceddice off.")
     else
@@ -1709,7 +1708,7 @@ Commands.dv = function(args)
   /dv mode <mode>     - Set mode: off or replace
   /dv refresh         - Re-probe Codex hooks (use after Codex update)
   /dv rules           - Configure dice processing rules
-  /dv forceddice <on|off>      - Use engine forcedDice (default on; auto-disables on unsupported Codex builds)
+  /dv forceddice <on|off>      - Use engine forcedDice (default on; never auto-disables, turn off manually on unsupported builds)
   /dv forceddice card <on|off> - DiceVision chat card on forcedDice path
   /dv test            - Test API connection
 

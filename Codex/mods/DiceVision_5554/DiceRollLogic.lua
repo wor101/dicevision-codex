@@ -469,11 +469,10 @@ function DiceRollLogic.forcedDiceHonored(rollInfo, forcedDice)
             -- d3 equivalence: the engine renders d3 on the d6 model, and
             -- whether rollInfo.rolls reports such a die as 3- or 6-faced
             -- is not verifiable from Lua (no official code path forces a
-            -- d3). Accept either face count for a forced d3 entry; the
-            -- result match still detects a virtually-rolled die 2/3 of
-            -- the time. Without this, a 6-faced report would
-            -- deterministically auto-disable the feature on the first
-            -- 1d3 roll of every session.
+            -- d3). Accept either face count for a forced d3 entry so this
+            -- check does not spuriously report a d3 roll as unverified.
+            -- (Only the nil return of this function is acted on now; the
+            -- honor check is non-disabling.)
             local facesMatch = rolled.numFaces == entry.numFaces
                 or (entry.numFaces == 3 and rolled.numFaces == 6)
             if not used[i]
