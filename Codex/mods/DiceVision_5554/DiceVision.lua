@@ -829,9 +829,10 @@ local function tryForcedDicePath(pendingRoll, rollData, diceForMessage, diceSum)
     -- set -- a global re-check would compare the reroll's dice against the
     -- wrong set and spuriously auto-disable. Skipping the re-fire (checked)
     -- fixes that WITHOUT globally trusting the build: every NEW roll gets a
-    -- fresh wrapper that verifies again, so an unsupported build is caught
-    -- per-roll (a coincidental value match only delays detection to the next
-    -- roll, rather than suppressing it for the whole session). The card send
+    -- fresh wrapper that verifies again, so an unsupported build gets a fresh
+    -- detection chance on every roll (a coincidental value match only delays
+    -- detection to the next roll, rather than suppressing it for the whole
+    -- session). The card send
     -- is pcall'd and precedes originalComplete so a cosmetic failure can
     -- never block Codex's own completion logic.
     local originalComplete = rollArgs.complete

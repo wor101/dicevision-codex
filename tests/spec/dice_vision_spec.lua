@@ -4105,6 +4105,58 @@ describe("DiceVision", function()
             assert.is_true(chatHas("which read: 7, 3"))
         end)
 
+        it("warns once per roll: the reroll re-fire of a disabled roll does not double-warn", function()
+            -- After a bad-build initial completion disables + warns, the
+            -- reroll re-fires the SAME wrapper. Its local `checked` is
+            -- already consumed, so the re-fire must not emit a second
+            -- WARNING or re-run the honor check.
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Batch Warn Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            })
+
+            local function warnCount()
+                local n = 0
+                for _, entry in ipairs(_G._chatLog) do
+                    if entry.type == "send"
+                        and string.find(entry.message, "WARNING", 1, true) then
+                        n = n + 1
+                    end
+                end
+                return n
+            end
+
+            local complete = _G._dmhubRollLog[1].complete
+            -- Initial completion: virtual dice -> disable + one WARNING.
+            complete({ rolls = {
+                { result = 2, numFaces = 10 },
+                { result = 9, numFaces = 10 },
+            }})
+            assert.is_false(DiceVision.useForcedDice)
+            assert.are.equal(1, warnCount())
+
+            -- Reroll re-fire of the same (consumed) wrapper: no second WARNING.
+            complete({ rolls = {
+                { result = 1, numFaces = 10 },
+                { result = 4, numFaces = 10 },
+            }})
+            assert.are.equal(1, warnCount())
+        end)
+
         it("notes once when a roll cannot be verified, without disabling", function()
             -- honored == nil (no readable rolls on rollInfo) must not
             -- auto-disable on uncertainty, but on an odd build it would
@@ -4145,6 +4197,46 @@ describe("DiceVision", function()
                 end
             end
             assert.are.equal(0, newNotes)
+        end)
+
+        it("a nil initial completion consumes the check: a false re-fire is inert", function()
+            -- Isolates the LOCAL `checked` guard from the global note flag.
+            -- A first nil completion consumes this wrapper's one check; a
+            -- subsequent false re-fire (reroll) on the SAME wrapper must be
+            -- skipped -- NOT disable. Without the local guard, honored==false
+            -- would disable regardless of the (independent) note flag.
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Nil Then False Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            })
+
+            local complete = _G._dmhubRollLog[1].complete
+            -- First completion is unverifiable (no readable rolls).
+            complete({})
+            assert.is_true(DiceVision.useForcedDice)
+
+            -- Re-fire the SAME wrapper with a mismatch. The check is already
+            -- consumed, so this must NOT disable or warn.
+            complete({ rolls = {
+                { result = 1, numFaces = 10 },
+                { result = 4, numFaces = 10 },
+            }})
+            assert.is_true(DiceVision.useForcedDice)
+            assert.is_false(chatHas("WARNING"))
         end)
 
         it("stays enabled when the engine honored forcedDice", function()
