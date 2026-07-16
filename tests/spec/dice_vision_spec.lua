@@ -4164,7 +4164,64 @@ describe("DiceVision", function()
             }})
 
             assert.is_true(DiceVision.useForcedDice)
+            assert.is_true(DiceVision.forcedDiceVerified)
             assert.is_false(chatHas("WARNING"))
+        end)
+
+        it("does not disable when a reroll re-fires the wrapper with different dice", function()
+            -- Regression: Codex's doRerollAmend reuses and re-fires the
+            -- initial roll's complete wrapper with the REROLL's rollInfo.
+            -- The wrapper closes over the initial forced set, so a per-roll
+            -- check compared the reroll's dice against the wrong set and
+            -- spuriously auto-disabled. The one-time capability latch makes
+            -- the re-fire inert.
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Reroll Refire Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            })
+
+            local complete = _G._dmhubRollLog[1].complete
+            -- Initial completion matches the initial forced set: latches.
+            complete({ rolls = {
+                { result = 7, numFaces = 10 },
+                { result = 3, numFaces = 10 },
+            }})
+            assert.is_true(DiceVision.forcedDiceVerified)
+
+            -- Reroll re-fires the SAME wrapper with different dice (the
+            -- engine honored the reroll's forcedDice, but the closure holds
+            -- the initial set). Must NOT disable and must NOT warn.
+            complete({ rolls = {
+                { result = 1, numFaces = 10 },
+                { result = 9, numFaces = 10 },
+            }})
+
+            assert.is_true(DiceVision.useForcedDice)
+            assert.is_false(chatHas("WARNING"))
+        end)
+
+        it("re-enabling re-arms the capability probe", function()
+            -- After an auto-disable, /dv forceddice on must reset the latch
+            -- so the next roll verifies against a fresh build.
+            DiceVision.forcedDiceVerified = true
+            DiceVision.useForcedDice = false
+            Commands.dv("forceddice on")
+            assert.is_true(DiceVision.useForcedDice)
+            assert.is_false(DiceVision.forcedDiceVerified)
         end)
 
         it("still calls the original complete when the card send throws", function()
