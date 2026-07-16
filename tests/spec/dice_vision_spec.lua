@@ -4065,16 +4065,18 @@ describe("DiceVision", function()
             assert.is_nil(logged.forcedDice)
         end)
 
-        it("auto-disables with a warning when the engine ignored forcedDice", function()
-            -- An unsupported Codex build silently ignores the forcedDice
-            -- field and rolls virtual dice. The complete wrapper compares
-            -- rollInfo.rolls against the forced values and must disable the
-            -- toggle loudly on a confirmed mismatch.
+        it("never disables on a value mismatch, even as the FIRST completion", function()
+            -- The reported power-roll bug: Codex's doRerollAmend re-fires
+            -- the initial wrapper with the reroll's rollInfo BEFORE the
+            -- initial completion, so the wrapper's first completion is a
+            -- value mismatch against the initial forced set -- yet the dice
+            -- were honored. Verification must NEVER disable or warn on a
+            -- value mismatch.
             setupReplaceMode()
             DiceVision.pendingRoll = {
                 rollArgs = { roll = "2d10+5", creature = nil },
                 originalRoll = "2d10+5",
-                description = "Unsupported Build Test",
+                description = "Mismatch First Test",
                 edges = 0,
                 banes = 0,
                 setActiveRoll = function() end,
@@ -4088,84 +4090,29 @@ describe("DiceVision", function()
                 },
                 total = 10,
             })
-
-            local logged = _G._dmhubRollLog[1]
-            assert.is_function(logged.complete)
-            -- Engine rolled its own (virtual) values instead of ours.
-            logged.complete({ rolls = {
-                { result = 2, numFaces = 10 },
-                { result = 9, numFaces = 10 },
-            }})
-
-            assert.is_false(DiceVision.useForcedDice)
-            assert.is_true(chatHas("WARNING"))
-            assert.is_true(chatHas("VIRTUAL dice"))
-            -- The discarded physical values must be reported so the
-            -- director can adjudicate the spoiled roll.
-            assert.is_true(chatHas("which read: 7, 3"))
-        end)
-
-        it("warns once per roll: the reroll re-fire of a disabled roll does not double-warn", function()
-            -- After a bad-build initial completion disables + warns, the
-            -- reroll re-fires the SAME wrapper. Its local `checked` is
-            -- already consumed, so the re-fire must not emit a second
-            -- WARNING or re-run the honor check.
-            setupReplaceMode()
-            DiceVision.pendingRoll = {
-                rollArgs = { roll = "2d10+5", creature = nil },
-                originalRoll = "2d10+5",
-                description = "Batch Warn Test",
-                edges = 0,
-                banes = 0,
-                setActiveRoll = function() end,
-            }
-            DiceVision.waitingForRoll = true
-
-            deliverRoll({
-                dice = {
-                    { type = "d10", value = 7 },
-                    { type = "d10", value = 3 },
-                },
-                total = 10,
-            })
-
-            local function warnCount()
-                local n = 0
-                for _, entry in ipairs(_G._chatLog) do
-                    if entry.type == "send"
-                        and string.find(entry.message, "WARNING", 1, true) then
-                        n = n + 1
-                    end
-                end
-                return n
-            end
 
             local complete = _G._dmhubRollLog[1].complete
-            -- Initial completion: virtual dice -> disable + one WARNING.
+            assert.is_function(complete)
+            -- First completion carries different (reroll) values.
             complete({ rolls = {
                 { result = 2, numFaces = 10 },
                 { result = 9, numFaces = 10 },
             }})
-            assert.is_false(DiceVision.useForcedDice)
-            assert.are.equal(1, warnCount())
 
-            -- Reroll re-fire of the same (consumed) wrapper: no second WARNING.
-            complete({ rolls = {
-                { result = 1, numFaces = 10 },
-                { result = 4, numFaces = 10 },
-            }})
-            assert.are.equal(1, warnCount())
+            assert.is_true(DiceVision.useForcedDice)
+            assert.is_false(chatHas("WARNING"))
+            assert.is_false(chatHas("ignored forcedDice"))
         end)
 
-        it("notes once when a roll cannot be verified, without disabling", function()
-            -- honored == nil (no readable rolls on rollInfo) must not
-            -- auto-disable on uncertainty, but on an odd build it would
-            -- otherwise be a silent repeated discard - say it once.
+        it("notes once (quietly) when the engine returns no readable dice, without disabling", function()
+            -- honored == nil (no readable rolls) is the only signal we keep.
+            -- It never disables; it says so once per session. Rerolls yield
+            -- a value mismatch (false), never nil, so they do not trigger it.
             setupReplaceMode()
             DiceVision.pendingRoll = {
                 rollArgs = { roll = "2d10+5", creature = nil },
                 originalRoll = "2d10+5",
-                description = "Unverifiable Test",
+                description = "Unreadable Dice Test",
                 edges = 0,
                 banes = 0,
                 setActiveRoll = function() end,
@@ -4183,60 +4130,21 @@ describe("DiceVision", function()
             _G._dmhubRollLog[1].complete({})
 
             assert.is_true(DiceVision.useForcedDice)
-            assert.is_true(chatHas("could not verify the engine honored"))
+            assert.is_true(chatHas("couldn't read the dice results"))
+            assert.is_false(chatHas("WARNING"))
             assert.is_true(DiceVision.warnedUnverifiedForcedDice)
 
-            -- Second unverifiable completion: no repeat note.
+            -- Second unreadable completion: no repeat note.
             local before = #_G._chatLog
             _G._dmhubRollLog[1].complete({})
             local newNotes = 0
             for i = before + 1, #_G._chatLog do
                 if _G._chatLog[i].type == "send"
-                    and string.find(_G._chatLog[i].message, "could not verify", 1, true) then
+                    and string.find(_G._chatLog[i].message, "couldn't read the dice", 1, true) then
                     newNotes = newNotes + 1
                 end
             end
             assert.are.equal(0, newNotes)
-        end)
-
-        it("a nil initial completion consumes the check: a false re-fire is inert", function()
-            -- Isolates the LOCAL `checked` guard from the global note flag.
-            -- A first nil completion consumes this wrapper's one check; a
-            -- subsequent false re-fire (reroll) on the SAME wrapper must be
-            -- skipped -- NOT disable. Without the local guard, honored==false
-            -- would disable regardless of the (independent) note flag.
-            setupReplaceMode()
-            DiceVision.pendingRoll = {
-                rollArgs = { roll = "2d10+5", creature = nil },
-                originalRoll = "2d10+5",
-                description = "Nil Then False Test",
-                edges = 0,
-                banes = 0,
-                setActiveRoll = function() end,
-            }
-            DiceVision.waitingForRoll = true
-
-            deliverRoll({
-                dice = {
-                    { type = "d10", value = 7 },
-                    { type = "d10", value = 3 },
-                },
-                total = 10,
-            })
-
-            local complete = _G._dmhubRollLog[1].complete
-            -- First completion is unverifiable (no readable rolls).
-            complete({})
-            assert.is_true(DiceVision.useForcedDice)
-
-            -- Re-fire the SAME wrapper with a mismatch. The check is already
-            -- consumed, so this must NOT disable or warn.
-            complete({ rolls = {
-                { result = 1, numFaces = 10 },
-                { result = 4, numFaces = 10 },
-            }})
-            assert.is_true(DiceVision.useForcedDice)
-            assert.is_false(chatHas("WARNING"))
         end)
 
         it("stays enabled when the engine honored forcedDice", function()
@@ -4266,100 +4174,6 @@ describe("DiceVision", function()
 
             assert.is_true(DiceVision.useForcedDice)
             assert.is_false(chatHas("WARNING"))
-        end)
-
-        it("does not disable when a reroll re-fires the wrapper with different dice", function()
-            -- Regression: Codex's doRerollAmend reuses and re-fires the
-            -- initial roll's complete wrapper with the REROLL's rollInfo.
-            -- The wrapper closes over the initial forced set, so re-checking
-            -- compared the reroll's dice against the wrong set and spuriously
-            -- auto-disabled. The wrapper's per-roll `checked` flag makes the
-            -- re-fire inert.
-            setupReplaceMode()
-            DiceVision.pendingRoll = {
-                rollArgs = { roll = "2d10+5", creature = nil },
-                originalRoll = "2d10+5",
-                description = "Reroll Refire Test",
-                edges = 0,
-                banes = 0,
-                setActiveRoll = function() end,
-            }
-            DiceVision.waitingForRoll = true
-
-            deliverRoll({
-                dice = {
-                    { type = "d10", value = 7 },
-                    { type = "d10", value = 3 },
-                },
-                total = 10,
-            })
-
-            local complete = _G._dmhubRollLog[1].complete
-            -- Initial completion matches the initial forced set.
-            complete({ rolls = {
-                { result = 7, numFaces = 10 },
-                { result = 3, numFaces = 10 },
-            }})
-
-            -- Reroll re-fires the SAME wrapper with different dice (the
-            -- engine honored the reroll's forcedDice, but the closure holds
-            -- the initial set). Must NOT disable and must NOT warn.
-            complete({ rolls = {
-                { result = 1, numFaces = 10 },
-                { result = 9, numFaces = 10 },
-            }})
-
-            assert.is_true(DiceVision.useForcedDice)
-            assert.is_false(chatHas("WARNING"))
-        end)
-
-        it("still detects an unsupported build on a LATER roll (per-roll, not latched)", function()
-            -- Per-wrapper verification (not a global latch): a first roll
-            -- that verified OK must NOT suppress detection on a separate
-            -- later roll. This is the safety property a global latch broke
-            -- (one coincidental match would trust a bad build all session).
-            setupReplaceMode()
-
-            -- Roll 1: honored -> stays enabled, its own wrapper is now done.
-            DiceVision.pendingRoll = {
-                rollArgs = { roll = "2d10+5", creature = nil },
-                originalRoll = "2d10+5",
-                description = "First Roll",
-                edges = 0, banes = 0,
-                setActiveRoll = function() end,
-            }
-            DiceVision.waitingForRoll = true
-            deliverRoll({
-                dice = { { type = "d10", value = 7 }, { type = "d10", value = 3 } },
-                total = 10,
-            })
-            _G._dmhubRollLog[1].complete({ rolls = {
-                { result = 7, numFaces = 10 },
-                { result = 3, numFaces = 10 },
-            }})
-            assert.is_true(DiceVision.useForcedDice)
-
-            -- Roll 2 (fresh wrapper): engine ignores forcedDice -> must still
-            -- disable, even though roll 1 verified.
-            DiceVision.pendingRoll = {
-                rollArgs = { roll = "2d10+5", creature = nil },
-                originalRoll = "2d10+5",
-                description = "Second Roll",
-                edges = 0, banes = 0,
-                setActiveRoll = function() end,
-            }
-            DiceVision.waitingForRoll = true
-            deliverRoll({
-                dice = { { type = "d10", value = 4 }, { type = "d10", value = 8 } },
-                total = 12,
-            })
-            _G._dmhubRollLog[2].complete({ rolls = {
-                { result = 1, numFaces = 10 },
-                { result = 6, numFaces = 10 },
-            }})
-
-            assert.is_false(DiceVision.useForcedDice)
-            assert.is_true(chatHas("WARNING"))
         end)
 
         it("re-enabling re-arms the once-per-session unverifiable note", function()

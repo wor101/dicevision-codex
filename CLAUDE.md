@@ -21,7 +21,7 @@ This repository contains a mod that integrates physical dice recognition (DiceVi
 2. `RollDialog.OnBeforeRoll` callback intercepts (if DiceVision connected in replace mode)
 3. DiceVision waits for physical dice from API
 4. `handlePendingRoll()` processes result and calls `dmhub.Roll()` via one of two paths:
-   - **forcedDice path** (default; toggle with `/dv forceddice`, requires a Codex build where `dmhub.Roll` accepts a `forcedDice` table): passes the intact roll expression plus `forcedDice = {{numFaces, result}, ...}`; the engine computes boons/banes/tier/nats natively. Falls back to legacy per-roll on any failure the mod can detect (unparseable expression, dice count/type mismatch, out-of-range value). On a Codex build without forcedDice support the engine silently ignores the field and rolls virtual dice; the mod verifies each completed initial roll against the forced values and auto-disables the toggle with a chat warning on a confirmed mismatch.
+   - **forcedDice path** (default; toggle with `/dv forceddice`, requires a Codex build where `dmhub.Roll` accepts a `forcedDice` table): passes the intact roll expression plus `forcedDice = {{numFaces, result}, ...}`; the engine computes boons/banes/tier/nats natively. Falls back to legacy per-roll on any failure the mod can detect (unparseable expression, dice count/type mismatch, out-of-range value). On a Codex build without forcedDice support the engine silently ignores the field and rolls virtual dice; the mod never auto-disables (a post-roll dice comparison could not survive Codex's reroll/power-roll re-fire ordering and was false-disabling a working feature), so an old build requires a manual `/dv forceddice off`.
    - **Legacy collapse path** (fallback, or `/dv forceddice off`): collapses the roll to a deterministic total, pre-computes edge/bane modifiers and tier-shift overrides.
 
 ## Draw Steel Edge/Bane Rules (Critical)
@@ -47,7 +47,7 @@ MCDM's official Draw Steel dice are 20-sided but numbered 1-10 twice, and physic
 - `/dv status` - Show connection status
 - `/dv mode <off|replace>` - Set operation mode
 - `/dv rules <subcommand>` - Configure dice processing rules (map, type, keep, clamp, clear)
-- `/dv forceddice <on|off>` - Use engine forcedDice (default on; auto-disables on unsupported Codex builds)
+- `/dv forceddice <on|off>` - Use engine forcedDice (default on; never auto-disables, turn off manually on unsupported Codex builds)
 - `/dv forceddice card <on|off>` - DiceVision chat card on the forcedDice path (default off)
 
 ## Coding Rules

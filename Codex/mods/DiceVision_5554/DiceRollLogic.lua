@@ -441,15 +441,17 @@ function DiceRollLogic.buildForcedDice(dice, expectedFaces)
     return forced
 end
 
---- Verify the engine actually honored a forcedDice table by comparing it
--- against the completed roll's rollInfo.rolls (each entry: {result, numFaces,
--- ...}). forcedDice support cannot be feature-detected from Lua: an older
--- Codex build silently ignores the field and rolls VIRTUAL dice, discarding
--- the physical values. This post-roll check is how the mod finds out.
+--- Compare a forcedDice table against the completed roll's rollInfo.rolls
+-- (each entry: {result, numFaces, ...}).
 -- Returns true if every forced entry appears in the rolled dice (subset
 -- match, since game-system mechanics may add dice beyond the forced ones),
--- false on a confirmed mismatch, or nil when rollInfo carries no readable
--- rolls array (cannot verify either way).
+-- false on a confirmed value mismatch, or nil when rollInfo carries no
+-- readable rolls array (cannot verify either way).
+-- NOTE: only the `nil` return now drives behavior (a quiet, non-disabling
+-- "couldn't read dice" note in tryForcedDicePath). The true/false value
+-- comparison is retained for completeness/tests but is no longer acted on:
+-- it produced false negatives under Codex's reroll/power-roll re-fire
+-- ordering and was disabling a working feature.
 function DiceRollLogic.forcedDiceHonored(rollInfo, forcedDice)
     if rollInfo == nil or type(forcedDice) ~= "table" or #forcedDice == 0 then
         return nil
