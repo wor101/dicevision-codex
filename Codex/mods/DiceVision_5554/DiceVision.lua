@@ -31,16 +31,13 @@ DiceVision = {
     currentRequestId = nil,
 
     -- forcedDice engine feature (requires a Codex build where dmhub.Roll
-    -- accepts a forcedDice table). Legacy collapse path stays the default
-    -- until that build ships to users; support cannot be feature-detected
-    -- from Lua. In-memory only, like mode/rules (dmhub.SetSettingValue is
-    -- the option if persistence is ever wanted).
-    -- TODO(forcedDice-ship): once the forcedDice-capable build is the
-    -- shipped norm, revisit this default and the transitional wording in:
-    -- setUseForcedDice chat text, the /dv help text, the DVDicePanel
-    -- settings section, CLAUDE.md (Architecture + Commands), and the
-    -- HANDOFF.md forcedDice section.
-    useForcedDice = false,
+    -- accepts a forcedDice table). Defaults ON: support cannot be
+    -- feature-detected from Lua, but the post-roll verification in
+    -- tryForcedDicePath auto-disables it with a chat warning on an
+    -- unsupported build, so at most one roll is affected there.
+    -- In-memory only, like mode/rules (dmhub.SetSettingValue is the
+    -- option if persistence is ever wanted).
+    useForcedDice = true,
     forcedDiceChatCard = false,  -- custom chat card off by default on the forcedDice path
 
     -- Panel-specific state (independent of replace mode)
@@ -1669,7 +1666,7 @@ Commands.dv = function(args)
   /dv mode <mode>     - Set mode: off or replace
   /dv refresh         - Re-probe Codex hooks (use after Codex update)
   /dv rules           - Configure dice processing rules
-  /dv forceddice <on|off>      - Use engine forcedDice (needs new Codex build)
+  /dv forceddice <on|off>      - Use engine forcedDice (default on; auto-disables on unsupported Codex builds)
   /dv forceddice card <on|off> - DiceVision chat card on forcedDice path
   /dv test            - Test API connection
 

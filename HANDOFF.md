@@ -254,7 +254,7 @@ Note the shape differs from `OnBeforeRoll` / `OnReroll`: there is no `boons`, `b
 
 #### handlePendingRoll
 
-**Two top-level paths selected by `DiceVision.useForcedDice` (default `false`):**
+**Two top-level paths selected by `DiceVision.useForcedDice` (default `true`; auto-disabled with a chat warning when the engine build ignores forcedDice):**
 
 **forcedDice path (`tryForcedDicePath`, requires a Codex build where `dmhub.Roll` accepts `forcedDice`):**
 ```lua
@@ -277,7 +277,7 @@ dmhub.Roll{
 - **Any failure the mod can detect falls through to the legacy path below.** The exception is a Codex build without forcedDice support: it cannot be feature-detected from Lua (hence the manual toggle), and the engine silently ignores the field and rolls VIRTUAL dice, discarding the physical values. Mitigation: the roll's `complete` wrapper verifies `rollInfo.rolls` against the forced values (`DiceRollLogic.forcedDiceHonored`) and on a confirmed mismatch auto-disables `useForcedDice` with a loud chat warning, so at most the first roll after enabling is affected. Rerolls have no verification hook (the dialog owns the amend's complete), but a reroll can only follow an initial roll that already verified.
 - An uncaught Lua error inside `tryForcedDicePath` is caught by a `pcall` at the fork in `handlePendingRoll` and falls through to legacy; without it the error would strand `isPolling=true` and wedge all subsequent rolls.
 
-**Legacy collapse path (default) - two code paths based on targeting:**
+**Legacy collapse path (fallback, or `/dv forceddice off`) - two code paths based on targeting:**
 
 **Non-Targeted Rolls (no multitargets):**
 ```lua
@@ -370,7 +370,7 @@ Edges and banes cancel 1-for-1. Apply rules based on net (edges - banes):
 | `/dv status` | Show connection status |
 | `/dv mode <off\|replace>` | Set operation mode |
 | `/dv rules <subcommand>` | Configure dice processing rules |
-| `/dv forceddice <on\|off>` | Use engine forcedDice (needs new Codex build; default off) |
+| `/dv forceddice <on\|off>` | Use engine forcedDice (default on; auto-disables on unsupported Codex builds) |
 | `/dv forceddice card <on\|off>` | DiceVision chat card on the forcedDice path (default off) |
 | `/dv test` | Test API connection |
 

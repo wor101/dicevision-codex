@@ -4349,16 +4349,20 @@ describe("DiceVision", function()
             assert.are.equal("d10", _G._loadTimeRules.d20TypeMapping)
             assert.are.equal(10, _G._loadTimeRules.d10ZeroMapping)
             assert.is_false(_G._loadTimeRules.typeMappingsOnPanel)
+            -- Production defaults: forcedDice path ON (auto-disables on
+            -- unsupported builds), chat card off.
+            assert.is_true(_G._loadTimeRules.useForcedDice)
+            assert.is_false(_G._loadTimeRules.forcedDiceChatCard)
         end)
 
-        it("legacy default-config path remaps Draw Steel dice end to end", function()
-            -- Production ships useForcedDice = false: the default user's
-            -- intercepted roll goes through the LEGACY collapse path, and
-            -- the remap + d10 0->10 value rule must fire there too.
+        it("legacy path remaps Draw Steel dice end to end", function()
+            -- The legacy collapse path stays reachable (/dv forceddice off,
+            -- or the auto-disable on unsupported builds), and the remap +
+            -- d10 0->10 value rule must fire there too.
             DiceVision.mode = "replace"
             DiceVision.connected = true
             DiceVision.sessionCode = "TEST"
-            assert.is_false(DiceVision.useForcedDice)
+            DiceVision.useForcedDice = false
             DiceVision.pendingRoll = {
                 rollArgs = { roll = "2d10", creature = nil },
                 originalRoll = "2d10",

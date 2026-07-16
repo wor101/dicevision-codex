@@ -155,6 +155,8 @@ _G.loadDiceVision = function()
             and DiceVision.rules.valueMappings["d10"]
             and DiceVision.rules.valueMappings["d10"][0],
         typeMappingsOnPanel = DiceVision.rules.typeMappingsOnPanel,
+        useForcedDice = DiceVision.useForcedDice,
+        forcedDiceChatCard = DiceVision.forcedDiceChatCard,
     }
 end
 
@@ -181,7 +183,10 @@ _G.resetDiceVisionState = function()
     -- Reset one-time-warning flags so each test starts cleanly.
     DiceVision.warnedMissingSetActiveRoll = nil
 
-    -- Reset forcedDice toggles (legacy path is the default)
+    -- Reset forcedDice toggles. NOTE: production defaults useForcedDice
+    -- to TRUE; the fixture baseline is false because most suites drive
+    -- the legacy path and enable the forced path explicitly. The
+    -- production default itself is pinned via _loadTimeRules.
     DiceVision.useForcedDice = false
     DiceVision.forcedDiceChatCard = false
 
