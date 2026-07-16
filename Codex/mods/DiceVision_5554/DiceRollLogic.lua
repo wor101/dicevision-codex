@@ -462,32 +462,42 @@ function DiceRollLogic.forcedDiceHonored(rollInfo, forcedDice)
     if not ok or type(rolls) ~= "table" or #rolls == 0 then
         return nil
     end
-    local used = {}
-    for _, entry in ipairs(forcedDice) do
-        local found = false
-        for i, rolled in ipairs(rolls) do
-            -- d3 equivalence: the engine renders d3 on the d6 model, and
-            -- whether rollInfo.rolls reports such a die as 3- or 6-faced
-            -- is not verifiable from Lua (no official code path forces a
-            -- d3). Accept either face count for a forced d3 entry so this
-            -- check does not spuriously report a d3 roll as unverified.
-            -- (Only the nil return of this function is acted on now; the
-            -- honor check is non-disabling.)
-            local facesMatch = rolled.numFaces == entry.numFaces
-                or (entry.numFaces == 3 and rolled.numFaces == 6)
-            if not used[i]
-                and facesMatch
-                and rolled.result == entry.result then
-                used[i] = true
-                found = true
-                break
+    -- The entry-field reads below are pcall'd too: rolls passed the table
+    -- check, but its ENTRIES may still be userdata proxies whose field
+    -- access throws. A throw means "cannot read the dice" (nil); it must
+    -- never escape into the complete callback that calls this.
+    local okCompare, honored = pcall(function()
+        local used = {}
+        for _, entry in ipairs(forcedDice) do
+            local found = false
+            for i, rolled in ipairs(rolls) do
+                -- d3 equivalence: the engine renders d3 on the d6 model, and
+                -- whether rollInfo.rolls reports such a die as 3- or 6-faced
+                -- is not verifiable from Lua (no official code path forces a
+                -- d3). Accept either face count for a forced d3 entry so this
+                -- check does not spuriously report a d3 roll as unverified.
+                -- (Only the nil return of this function is acted on now; the
+                -- honor check is non-disabling.)
+                local facesMatch = rolled.numFaces == entry.numFaces
+                    or (entry.numFaces == 3 and rolled.numFaces == 6)
+                if not used[i]
+                    and facesMatch
+                    and rolled.result == entry.result then
+                    used[i] = true
+                    found = true
+                    break
+                end
+            end
+            if not found then
+                return false
             end
         end
-        if not found then
-            return false
-        end
+        return true
+    end)
+    if not okCompare then
+        return nil
     end
-    return true
+    return honored
 end
 
 -- ============================================================================

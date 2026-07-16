@@ -3509,8 +3509,9 @@ describe("DiceVision", function()
                 assert.are_not.equal("custom", entry.type)
             end
             -- The complete wrapper is always installed (it carries the
-            -- forcedDice verification), but with the card off it must not
-            -- send a custom message even after the roll completes.
+            -- no-readable-dice note and the optional card send), but with
+            -- the card off it must not send a custom message even after
+            -- the roll completes.
             local logged = _G._dmhubRollLog[1]
             assert.is_function(logged.complete)
             logged.complete({ rolls = {
@@ -4102,6 +4103,43 @@ describe("DiceVision", function()
             assert.is_true(DiceVision.useForcedDice)
             assert.is_false(chatHas("WARNING"))
             assert.is_false(chatHas("ignored forcedDice"))
+            -- A mismatch (false) must not trigger the no-readable-dice note
+            -- either: honored == nil is its ONLY trigger. If it fired here
+            -- it would fire on every power-roll reroll re-fire, and setting
+            -- the latch would also suppress the legitimate note later.
+            assert.is_false(chatHas("couldn't read the dice"))
+            assert.is_false(DiceVision.warnedUnverifiedForcedDice)
+        end)
+
+        it("does not fall back to legacy when setActiveRoll throws", function()
+            -- dmhub.Roll has already fired by the time setActiveRoll runs.
+            -- An error escaping to handlePendingRoll's pcall would trigger
+            -- the legacy fallback and roll a SECOND time on top of the
+            -- forced roll; it must be contained inside tryForcedDicePath.
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "setActiveRoll Throw Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() error("wiring failure") end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            })
+
+            -- Exactly one engine roll, and it is the forced one (intact
+            -- expression + forcedDice), not a legacy collapsed total.
+            assert.are.equal(1, #_G._dmhubRollLog)
+            assert.are.equal("2d10+5", _G._dmhubRollLog[1].roll)
+            assert.is_not_nil(_G._dmhubRollLog[1].forcedDice)
         end)
 
         it("notes once (quietly) when the engine returns no readable dice, without disabling", function()
@@ -4514,8 +4552,9 @@ describe("DiceVision", function()
             assert.are.equal("d3", _G._loadTimeRules.d6TypeMapping)
             assert.are.equal(10, _G._loadTimeRules.d10ZeroMapping)
             assert.is_false(_G._loadTimeRules.typeMappingsOnPanel)
-            -- Production defaults: forcedDice path ON (auto-disables on
-            -- unsupported builds), chat card off.
+            -- Production defaults: forcedDice path ON (never auto-disables;
+            -- unsupported builds need a manual /dv forceddice off), chat
+            -- card off.
             assert.is_true(_G._loadTimeRules.useForcedDice)
             assert.is_false(_G._loadTimeRules.forcedDiceChatCard)
         end)
@@ -4613,8 +4652,8 @@ describe("DiceVision", function()
 
         it("legacy path remaps Draw Steel dice end to end", function()
             -- The legacy collapse path stays reachable (/dv forceddice off,
-            -- or the auto-disable on unsupported builds), and the remap +
-            -- d10 0->10 value rule must fire there too.
+            -- or a per-roll fallback when forced construction fails), and
+            -- the remap + d10 0->10 value rule must fire there too.
             DiceVision.mode = "replace"
             DiceVision.connected = true
             DiceVision.sessionCode = "TEST"

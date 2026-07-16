@@ -852,9 +852,15 @@ local function tryForcedDicePath(pendingRoll, rollData, diceForMessage, diceSum)
     end
 
     local roll = dmhub.Roll(copy)
-    -- Wire the dialog's g_activeRoll or re-rolls silently break.
+    -- Wire the dialog's g_activeRoll or re-rolls silently break. pcall'd:
+    -- the engine roll above has already fired, so an error here must not
+    -- escape to handlePendingRoll's pcall and trigger the legacy fallback
+    -- -- that would roll a SECOND time on top of the roll just fired.
     if pendingRoll.setActiveRoll and roll then
-        pendingRoll.setActiveRoll(roll)
+        local ok, err = pcall(pendingRoll.setActiveRoll, roll)
+        if not ok then
+            print("DV: forcedDice - setActiveRoll failed: " .. tostring(err) .. "; re-rolls may not amend correctly")
+        end
     elseif not roll then
         print("DV: forcedDice - dmhub.Roll returned nil; re-rolls may not amend correctly")
     end

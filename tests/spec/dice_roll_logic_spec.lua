@@ -1540,6 +1540,18 @@ describe("forcedDiceHonored", function()
         assert.is_nil(DiceRollLogic.forcedDiceHonored(nil, FORCED))
     end)
 
+    it("returns nil (does not throw) when a rolled entry errors on field access", function()
+        -- rolls entries may be userdata-backed proxies whose field access
+        -- raises. That must read as "cannot verify" (nil) and never escape:
+        -- this function runs inside the un-pcall'd complete callback, and a
+        -- throw there would block Codex's own roll completion.
+        local throwingEntry = setmetatable({}, {
+            __index = function() error("proxy access denied") end,
+        })
+        assert.is_nil(DiceRollLogic.forcedDiceHonored(
+            { rolls = { throwingEntry } }, FORCED))
+    end)
+
     it("returns nil for a missing or empty forcedDice table", function()
         local info = { rolls = {{ result = 7, numFaces = 10 }} }
         assert.is_nil(DiceRollLogic.forcedDiceHonored(info, nil))
@@ -1549,8 +1561,9 @@ describe("forcedDiceHonored", function()
     it("accepts a 6-faced rolled die for a forced d3 entry", function()
         -- The engine renders d3 on the d6 model; whether rollInfo.rolls
         -- reports 3 or 6 faces is unverifiable from Lua, so either must
-        -- pass or a 6-faced report would deterministically auto-disable
-        -- the feature on every 1d3 roll.
+        -- pass or a 6-faced report would read as a value mismatch on
+        -- every 1d3 roll (and, historically, auto-disabled the feature
+        -- back when the mismatch return was acted on).
         assert.is_true(DiceRollLogic.forcedDiceHonored(
             { rolls = {{ result = 2, numFaces = 6 }} },
             {{numFaces = 3, result = 2}}))
