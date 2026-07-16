@@ -312,10 +312,14 @@ end
 -- Forced Dice (engine forcedDice support)
 -- ============================================================================
 
--- Dice the engine can render/force. d100 is intentionally absent: the ability
--- roll path never handled percentile, so a d100 expression falls back to the
--- legacy collapse path.
+-- Dice the engine can render/force. d3 is first-class in Codex's Draw Steel
+-- UI (the dice panel tile rolls dmhub.Roll{numFaces = 3} and renders it on
+-- the d6 model showing 1-3, and rollable tables offer 1d3), so numFaces = 3
+-- forcedDice entries match engine d3 dice. d100 is intentionally absent: the
+-- ability roll path never handled percentile, so a d100 expression falls
+-- back to the legacy collapse path.
 local SUPPORTED_FORCED_DICE = {
+    [3] = true,
     [4] = true, [6] = true, [8] = true, [10] = true, [12] = true, [20] = true,
 }
 

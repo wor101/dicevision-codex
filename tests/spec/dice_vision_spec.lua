@@ -3747,6 +3747,88 @@ describe("DiceVision", function()
                 _G._dmhubRollLog[1].forcedDice)
         end)
 
+        it("remaps 6-sided d3s via the default type mapping", function()
+            -- d3s are 6-sided but numbered 1-3 twice; the camera reports
+            -- them as "d6". The default d6 -> d3 mapping lets them fill a
+            -- d3 expression's slots (the engine takes numFaces = 3 as a
+            -- first-class die and renders it on the d6 model).
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "1d3", creature = nil },
+                originalRoll = "1d3",
+                description = "d3 Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = { { type = "d6", value = 2 } },
+                total = 2,
+            })
+
+            local logged = _G._dmhubRollLog[1]
+            assert.are.equal("1d3", logged.roll)
+            assert.are.same({{numFaces = 3, result = 2}}, logged.forcedDice)
+            assert.is_false(chatHas("Physical dice do not match the roll"))
+        end)
+
+        it("falls back when a remapped d6 reads above 3 on a d3 roll", function()
+            -- A REAL d6 (or a misread) showing 4-6 cannot be a d3 face:
+            -- out-of-range refusal -> announced legacy fallback naming the
+            -- mapping, with the value-correct total.
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "1d3", creature = nil },
+                originalRoll = "1d3",
+                description = "d3 Range Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = { { type = "d6", value = 5 } },
+                total = 5,
+            })
+
+            assert.is_true(chatHas("a die value out of range"))
+            assert.is_true(chatHas("type mapping d6 -> d3 was applied"))
+            local logged = _G._dmhubRollLog[1]
+            assert.are.equal("5", logged.roll)
+            assert.is_nil(logged.forcedDice)
+        end)
+
+        it("characterizes the real-d6 divert under the default mapping", function()
+            -- Same trade-off as the real d20: a REAL d6 rolled for a d6
+            -- expression is remapped to d3 and can never fill the d6 slot
+            -- -> announced legacy fallback naming the mapping.
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "1d6", creature = nil },
+                originalRoll = "1d6",
+                description = "Real d6 Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = { { type = "d6", value = 4 } },
+                total = 4,
+            })
+
+            assert.is_true(chatHas("wrong die types"))
+            assert.is_true(chatHas("type mapping d6 -> d3 was applied"))
+            local logged = _G._dmhubRollLog[1]
+            assert.are.equal("4", logged.roll)
+            assert.is_true(logged.instant)
+            assert.is_nil(logged.forcedDice)
+        end)
+
         it("characterizes the real-d20 divert under the default mapping", function()
             -- Ships enabled by default: a REAL d20 rolled for a d20
             -- expression is remapped to d10 by the default rule, so it can
@@ -4329,11 +4411,12 @@ describe("DiceVision", function()
             assert.is_true(chatHas("Panel rolls: off"))
         end)
 
-        it("rules clear restores the default d20 -> d10 mapping; clear all empties it", function()
+        it("rules clear restores the default type mappings; clear all empties them", function()
             DiceVision.rules.typeMappings = {}
             DiceVision.rules.typeMappingsOnPanel = true
             Commands.dv("rules clear")
             assert.are.equal("d10", DiceVision.rules.typeMappings["d20"])
+            assert.are.equal("d3", DiceVision.rules.typeMappings["d6"])
             assert.is_false(DiceVision.rules.typeMappingsOnPanel)
 
             Commands.dv("rules clear all")
@@ -4347,6 +4430,7 @@ describe("DiceVision", function()
             -- copy loop in DiceVision.lua fails a test.
             assert.is_not_nil(_G._loadTimeRules)
             assert.are.equal("d10", _G._loadTimeRules.d20TypeMapping)
+            assert.are.equal("d3", _G._loadTimeRules.d6TypeMapping)
             assert.are.equal(10, _G._loadTimeRules.d10ZeroMapping)
             assert.is_false(_G._loadTimeRules.typeMappingsOnPanel)
             -- Production defaults: forcedDice path ON (auto-disables on

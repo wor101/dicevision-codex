@@ -52,12 +52,14 @@ local DEFAULT_RULES = {
     valueMappings = {
         ["d10"] = {[0] = 10},  -- Standard d10: 0 reads as 10
     },
-    -- Draw Steel's official dice are 20-sided but numbered 1-10 twice; the
-    -- camera classifies by shape and reports them as "d20". Intercepted
-    -- rolls remap them to d10 by default; panel rolls only when
-    -- typeMappingsOnPanel is enabled.
+    -- Physical dice whose shape does not match their faces: Draw Steel's
+    -- official dice are 20-sided but numbered 1-10 twice, and d3s are
+    -- 6-sided but numbered 1-3 twice. The camera classifies by shape and
+    -- reports them as "d20"/"d6". Intercepted rolls remap them by default;
+    -- panel rolls only when typeMappingsOnPanel is enabled.
     typeMappings = {
         ["d20"] = "d10",
+        ["d6"] = "d3",
     },
     diceSelection = nil,
 }
@@ -136,12 +138,15 @@ function DiceVisionRollMessage.CreateDiePanel(faces, value, dropped)
     local sat = dropped and 0.3 or 0.7
     local bright = dropped and 0.2 or 0.4
     local labelColor = dropped and "#888888" or (diceStyle.color or "#ffffff")
+    -- No d3 icon exists; render d3 on the d6 icon, matching the official
+    -- Draw Steel dice panel ("d3 uses the d6 model").
+    local imageFaces = (faces == 3) and 6 or faces
     return gui.Panel{
         width = 40,
         height = 40,
         halign = "center",
         valign = "center",
-        bgimage = string.format("ui-icons/d%d-filled.png", faces),
+        bgimage = string.format("ui-icons/d%d-filled.png", imageFaces),
         bgcolor = diceStyle.bgcolor or "#2d5a2d",
         saturation = sat,
         brightness = bright,
@@ -149,7 +154,7 @@ function DiceVisionRollMessage.CreateDiePanel(faces, value, dropped)
             interactable = false,
             width = "100%",
             height = "100%",
-            bgimage = string.format("ui-icons/d%d.png", faces),
+            bgimage = string.format("ui-icons/d%d.png", imageFaces),
             bgcolor = diceStyle.trimcolor or "#4a9a4a",
             gui.Label{
                 interactable = false,

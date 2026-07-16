@@ -151,6 +151,8 @@ _G.loadDiceVision = function()
     _G._loadTimeRules = {
         d20TypeMapping = DiceVision.rules.typeMappings
             and DiceVision.rules.typeMappings["d20"],
+        d6TypeMapping = DiceVision.rules.typeMappings
+            and DiceVision.rules.typeMappings["d6"],
         d10ZeroMapping = DiceVision.rules.valueMappings
             and DiceVision.rules.valueMappings["d10"]
             and DiceVision.rules.valueMappings["d10"][0],
@@ -196,13 +198,15 @@ _G.resetDiceVisionState = function()
     DiceVision.panelRequestId = nil
     DiceVision.panelTokenId = nil
 
-    -- Reset rules to defaults (d10: 0->10, d20 -> d10 type mapping)
+    -- Reset rules to defaults (d10: 0->10, d20 -> d10 and d6 -> d3 type
+    -- mappings)
     DiceVision.rules = {
         valueMappings = {
             ["d10"] = {[0] = 10},
         },
         typeMappings = {
             ["d20"] = "d10",
+            ["d6"] = "d3",
         },
         typeMappingsOnPanel = false,
         diceSelection = nil,

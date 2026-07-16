@@ -1259,8 +1259,8 @@ describe("provenance fields survive the rules pipeline", function()
 end)
 
 describe("isSupportedDieType", function()
-    it("accepts the six engine-renderable dice", function()
-        for _, dieType in ipairs({"d4", "d6", "d8", "d10", "d12", "d20"}) do
+    it("accepts the engine-renderable dice", function()
+        for _, dieType in ipairs({"d3", "d4", "d6", "d8", "d10", "d12", "d20"}) do
             assert.is_true(DiceRollLogic.isSupportedDieType(dieType))
         end
         assert.is_true(DiceRollLogic.isSupportedDieType("D10"))
@@ -1341,6 +1341,12 @@ describe("extractExpectedDiceList", function()
         -- Engine keep semantics run against the forced faces, so all
         -- physical dice must be supplied.
         assert.are.same({10, 10, 10}, DiceRollLogic.extractExpectedDiceList("3d10 keep 2"))
+    end)
+
+    it("supports d3 expressions", function()
+        -- d3 is first-class in Codex's Draw Steel UI (panel tile, tables).
+        assert.are.same({3}, DiceRollLogic.extractExpectedDiceList("1d3"))
+        assert.are.same({3, 3}, DiceRollLogic.extractExpectedDiceList("2d3+1"))
     end)
 
     it("handles mixed dice groups in order", function()

@@ -390,6 +390,7 @@ local DEFAULT_RULES = {
     },
     typeMappings = {
         ["d20"] = "d10",       -- Draw Steel 20-sided d10s report as "d20"
+        ["d6"] = "d3",         -- 6-sided d3s (numbered 1-3 twice) report as "d6"
     },
     diceSelection = nil,
 }
@@ -444,7 +445,11 @@ Percentile detection (`detectPercentilePair`) always takes the RAW `rollData.dic
 
 ### Draw Steel Physical Dice (why type mappings exist)
 
-MCDM's official Draw Steel dice are 20-sided but numbered 1-10 twice. The dice-vision camera classifies dice by physical shape (its taxonomy is d4/d6/d8/d10/d12/d20 only -- see `DiceType` in dice-vision `backend/app/models/shared_types.py`), so these dice arrive as `{type = "d20", value = 1..10}` and would type-mismatch against a `2d10` expression on the forcedDice path. The default `d20 -> d10` type mapping remaps them for intercepted rolls; panel rolls are freeform (a physical d20 might really be a d20), so they only remap when `typeMappingsOnPanel` is enabled.
+MCDM's official Draw Steel dice are 20-sided but numbered 1-10 twice, and physical d3s are 6-sided but numbered 1-3 twice. The dice-vision camera classifies dice by physical shape (its taxonomy is d4/d6/d8/d10/d12/d20 only -- see `DiceType` in dice-vision `backend/app/models/shared_types.py`), so these dice arrive as `{type = "d20", value = 1..10}` / `{type = "d6", value = 1..3}` and would type-mismatch against `2d10` / `1d3` expressions on the forcedDice path. The default `d20 -> d10` and `d6 -> d3` type mappings remap them for intercepted rolls; panel rolls are freeform (a physical d20/d6 might really be a d20/d6), so they only remap when `typeMappingsOnPanel` is enabled.
+
+d3 forcing works because d3 is first-class in Codex's Draw Steel UI: the dice panel tile rolls `dmhub.Roll{numDice = 1, numFaces = 3}` and renders it on the d6 geometry showing 1-3 (see `Draw Steel UX Update/DicePanel.lua`), and rollable tables offer `1d3`. The DiceVision chat card mirrors that choice: `CreateDiePanel` renders `faces = 3` on the d6 icon (no d3 icon exists).
+
+Trade-off (same as the real-d20 divert): a REAL d6 rolled for a d6 expression is remapped to d3 and diverts to the announced legacy fallback naming the mapping. Remove with `/dv rules type d6 clear` if real d6s are in play.
 
 ### Rules Commands
 
