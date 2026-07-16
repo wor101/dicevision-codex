@@ -40,17 +40,12 @@ DiceVision = {
     -- option if persistence is ever wanted).
     useForcedDice = true,
     forcedDiceChatCard = false,  -- custom chat card off by default on the forcedDice path
-    -- One-per-load notice flag: fires when a roll's forcedDice honor check
-    -- returns nil (rollInfo carried no readable dice), which would
-    -- otherwise be a silent, repeated discard on an odd build.
+    -- One-per-session notice flag: fires when a roll's forcedDice honor
+    -- check returns nil (rollInfo carried no readable dice), which would
+    -- otherwise be a silent, repeated discard on an odd build. (Per-roll
+    -- honor verification itself is a local flag inside each roll's complete
+    -- wrapper -- see tryForcedDicePath -- not global state.)
     warnedUnverifiedForcedDice = false,
-    -- One-time capability latch. forcedDice support is a build property, not
-    -- a per-roll one, so the first honored roll proves it. Crucially, a
-    -- reroll re-fires the INITIAL roll's complete wrapper with the reroll's
-    -- rollInfo (Codex's doRerollAmend reuses the original complete), so a
-    -- per-roll check would compare the reroll's dice against the initial
-    -- forced set and false-positive. Once verified, we stop checking.
-    forcedDiceVerified = false,
 
     -- Panel-specific state (independent of replace mode)
     panelWaitingForRoll = false,
@@ -787,9 +782,10 @@ local function tryForcedDicePath(pendingRoll, rollData, diceForMessage, diceSum)
     -- merges them into amendArgs before Amend(); requires a dialog version
     -- whose doRerollAmend accepts extraFields. We install no complete wrapper
     -- here: doRerollAmend reuses (and re-fires) the INITIAL roll's complete
-    -- wrapper, whose one-time capability latch already confirmed support on
-    -- the first roll. That re-fire is intentionally inert now -- re-checking
-    -- it against the initial forced set was the reroll false-positive bug.
+    -- wrapper. That wrapper already ran its one-time honor check on the
+    -- initial completion (its local `checked` flag), so the re-fire is inert
+    -- -- re-checking the reroll's dice against the initial forced set was the
+    -- reroll false-positive bug.
     if pendingRoll.isReroll and pendingRoll.amendWithResult then
         if pendingRoll.setActiveRoll and pendingRoll.activeRoll then
             pendingRoll.setActiveRoll(pendingRoll.activeRoll)
@@ -825,23 +821,26 @@ local function tryForcedDicePath(pendingRoll, rollData, diceForMessage, diceSum)
     -- delay proves annoying, `copy.instant = true` is the one-line change.
 
     -- Wrap complete to verify the engine honored forcedDice (an unsupported
-    -- build silently ignores the field and rolls virtual dice). This is a
-    -- ONE-TIME capability probe: forcedDice support is a build property, so
-    -- the first honored roll proves it and latches DiceVision.forcedDiceVerified.
-    -- After that we must stop checking, because a reroll re-fires THIS
-    -- wrapper with the reroll's rollInfo (Codex's doRerollAmend reuses the
-    -- original complete) while the closure still holds the initial forced
-    -- set -- re-checking would compare the reroll's dice against the wrong
-    -- set and spuriously auto-disable. The card send is pcall'd and precedes
-    -- originalComplete so a cosmetic failure can never block Codex's own
-    -- completion logic.
+    -- build silently ignores the field and rolls virtual dice). `checked` is
+    -- LOCAL to this wrapper, so verification runs exactly once PER ROLL, on
+    -- this roll's own first completion. This is deliberate: a reroll re-fires
+    -- THIS wrapper with the reroll's rollInfo (Codex's doRerollAmend reuses
+    -- the original complete) while the closure still holds the initial forced
+    -- set -- a global re-check would compare the reroll's dice against the
+    -- wrong set and spuriously auto-disable. Skipping the re-fire (checked)
+    -- fixes that WITHOUT globally trusting the build: every NEW roll gets a
+    -- fresh wrapper that verifies again, so an unsupported build is caught
+    -- per-roll (a coincidental value match only delays detection to the next
+    -- roll, rather than suppressing it for the whole session). The card send
+    -- is pcall'd and precedes originalComplete so a cosmetic failure can
+    -- never block Codex's own completion logic.
     local originalComplete = rollArgs.complete
+    local checked = false
     copy.complete = function(rollInfo)
-        if not DiceVision.forcedDiceVerified then
+        if not checked then
+            checked = true
             local honored = DiceRollLogic.forcedDiceHonored(rollInfo, forcedDice)
-            if honored == true then
-                DiceVision.forcedDiceVerified = true
-            elseif honored == false then
+            if honored == false then
                 DiceVision.useForcedDice = false
                 -- Report the discarded physical values so the director can
                 -- adjudicate the one spoiled roll on the spot.
@@ -854,9 +853,9 @@ local function tryForcedDicePath(pendingRoll, rollData, diceForMessage, diceSum)
                     table.concat(values, ", ")))
             elseif honored == nil and not DiceVision.warnedUnverifiedForcedDice then
                 -- Cannot verify either way (no readable rolls on rollInfo).
-                -- Do NOT auto-disable on uncertainty, but say it once: on an
-                -- odd build this would otherwise be a silent, repeated
-                -- discard of the physical values.
+                -- Do NOT auto-disable on uncertainty, but say it once (global
+                -- flag): on an odd build this would otherwise be a silent,
+                -- repeated discard of the physical values.
                 DiceVision.warnedUnverifiedForcedDice = true
                 chat.Send("[DiceVision] Note: could not verify the engine honored the physical dice for this roll. If results ignore your physical dice, run /dv forceddice off.")
             end
@@ -1264,9 +1263,8 @@ DiceVision.connect = function(code, onResult)
     validateSession(function(success, result)
         if success then
             DiceVision.mode = "replace"
-            -- Fresh session: re-arm the one-time forcedDice capability probe
-            -- so the first roll here verifies engine support.
-            DiceVision.forcedDiceVerified = false
+            -- Fresh session: re-arm the once-per-session unverifiable note.
+            -- (Per-roll honor verification re-arms on its own each roll.)
             DiceVision.warnedUnverifiedForcedDice = false
             -- Probe-and-register: warn the user about any hook the Codex
             -- install is missing so they know which roll types will fall
@@ -1395,10 +1393,10 @@ end
 DiceVision.setUseForcedDice = function(enabled)
     DiceVision.useForcedDice = enabled and true or false
     if DiceVision.useForcedDice then
-        -- Re-arm the one-time capability probe so a re-enable (e.g. after an
-        -- unsupported-build auto-disable, or after updating Codex) verifies
-        -- against a fresh roll.
-        DiceVision.forcedDiceVerified = false
+        -- Re-arm the once-per-session unverifiable note so a re-enable (e.g.
+        -- after an unsupported-build auto-disable, or after updating Codex)
+        -- can surface it again. Per-roll honor checks re-arm on their own
+        -- (each roll's wrapper verifies independently).
         DiceVision.warnedUnverifiedForcedDice = false
         chat.Send("[DiceVision] forcedDice enabled. Requires a Codex build with dmhub.Roll forcedDice support: an older build silently rolls VIRTUAL dice instead. DiceVision verifies each initial roll and auto-disables with a warning if that happens.")
     else

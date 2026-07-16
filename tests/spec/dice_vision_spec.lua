@@ -3031,6 +3031,15 @@ describe("DiceVision", function()
             assert.are.equal(true, cbResult.active)
         end)
 
+        it("on success re-arms the once-per-session unverifiable note", function()
+            -- A prior session may have latched warnedUnverifiedForcedDice;
+            -- a fresh connect must re-arm it so the note can fire again.
+            DiceVision.warnedUnverifiedForcedDice = true
+            stubSession("active")
+            DiceVision.connect("ab1")
+            assert.is_false(DiceVision.warnedUnverifiedForcedDice)
+        end)
+
         it("on inactive session clears sessionCode, stays disconnected, fires onResult(false)", function()
             stubSession("inactive")
             local cbSuccess = nil
@@ -4164,17 +4173,16 @@ describe("DiceVision", function()
             }})
 
             assert.is_true(DiceVision.useForcedDice)
-            assert.is_true(DiceVision.forcedDiceVerified)
             assert.is_false(chatHas("WARNING"))
         end)
 
         it("does not disable when a reroll re-fires the wrapper with different dice", function()
             -- Regression: Codex's doRerollAmend reuses and re-fires the
             -- initial roll's complete wrapper with the REROLL's rollInfo.
-            -- The wrapper closes over the initial forced set, so a per-roll
-            -- check compared the reroll's dice against the wrong set and
-            -- spuriously auto-disabled. The one-time capability latch makes
-            -- the re-fire inert.
+            -- The wrapper closes over the initial forced set, so re-checking
+            -- compared the reroll's dice against the wrong set and spuriously
+            -- auto-disabled. The wrapper's per-roll `checked` flag makes the
+            -- re-fire inert.
             setupReplaceMode()
             DiceVision.pendingRoll = {
                 rollArgs = { roll = "2d10+5", creature = nil },
@@ -4195,12 +4203,11 @@ describe("DiceVision", function()
             })
 
             local complete = _G._dmhubRollLog[1].complete
-            -- Initial completion matches the initial forced set: latches.
+            -- Initial completion matches the initial forced set.
             complete({ rolls = {
                 { result = 7, numFaces = 10 },
                 { result = 3, numFaces = 10 },
             }})
-            assert.is_true(DiceVision.forcedDiceVerified)
 
             -- Reroll re-fires the SAME wrapper with different dice (the
             -- engine honored the reroll's forcedDice, but the closure holds
@@ -4214,14 +4221,61 @@ describe("DiceVision", function()
             assert.is_false(chatHas("WARNING"))
         end)
 
-        it("re-enabling re-arms the capability probe", function()
-            -- After an auto-disable, /dv forceddice on must reset the latch
-            -- so the next roll verifies against a fresh build.
-            DiceVision.forcedDiceVerified = true
+        it("still detects an unsupported build on a LATER roll (per-roll, not latched)", function()
+            -- Per-wrapper verification (not a global latch): a first roll
+            -- that verified OK must NOT suppress detection on a separate
+            -- later roll. This is the safety property a global latch broke
+            -- (one coincidental match would trust a bad build all session).
+            setupReplaceMode()
+
+            -- Roll 1: honored -> stays enabled, its own wrapper is now done.
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "First Roll",
+                edges = 0, banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+            deliverRoll({
+                dice = { { type = "d10", value = 7 }, { type = "d10", value = 3 } },
+                total = 10,
+            })
+            _G._dmhubRollLog[1].complete({ rolls = {
+                { result = 7, numFaces = 10 },
+                { result = 3, numFaces = 10 },
+            }})
+            assert.is_true(DiceVision.useForcedDice)
+
+            -- Roll 2 (fresh wrapper): engine ignores forcedDice -> must still
+            -- disable, even though roll 1 verified.
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Second Roll",
+                edges = 0, banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+            deliverRoll({
+                dice = { { type = "d10", value = 4 }, { type = "d10", value = 8 } },
+                total = 12,
+            })
+            _G._dmhubRollLog[2].complete({ rolls = {
+                { result = 1, numFaces = 10 },
+                { result = 6, numFaces = 10 },
+            }})
+
+            assert.is_false(DiceVision.useForcedDice)
+            assert.is_true(chatHas("WARNING"))
+        end)
+
+        it("re-enabling re-arms the once-per-session unverifiable note", function()
+            DiceVision.warnedUnverifiedForcedDice = true
             DiceVision.useForcedDice = false
             Commands.dv("forceddice on")
             assert.is_true(DiceVision.useForcedDice)
-            assert.is_false(DiceVision.forcedDiceVerified)
+            assert.is_false(DiceVision.warnedUnverifiedForcedDice)
         end)
 
         it("still calls the original complete when the card send throws", function()

@@ -192,7 +192,6 @@ _G.resetDiceVisionState = function()
     DiceVision.useForcedDice = false
     DiceVision.forcedDiceChatCard = false
     DiceVision.warnedUnverifiedForcedDice = false
-    DiceVision.forcedDiceVerified = false
 
     -- Reset panel state
     DiceVision.panelWaitingForRoll = false
