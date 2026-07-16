@@ -142,6 +142,20 @@ _G.loadDiceVision = function()
 
     -- Load DiceVision.lua
     dofile(projectRoot .. "/Codex/mods/DiceVision_5554/DiceVision.lua")
+
+    -- Snapshot the LOAD-TIME rules before resetDiceVisionState overwrites
+    -- them with its own copy of the defaults. This is the only way a test
+    -- can assert that the module's DEFAULT_RULES copy loop actually ran
+    -- (deleting that loop would otherwise fail zero tests, since every
+    -- test sees the helper's hand-written defaults instead).
+    _G._loadTimeRules = {
+        d20TypeMapping = DiceVision.rules.typeMappings
+            and DiceVision.rules.typeMappings["d20"],
+        d10ZeroMapping = DiceVision.rules.valueMappings
+            and DiceVision.rules.valueMappings["d10"]
+            and DiceVision.rules.valueMappings["d10"][0],
+        typeMappingsOnPanel = DiceVision.rules.typeMappingsOnPanel,
+    }
 end
 
 -- Resets DiceVision state between tests. Call in before_each().

@@ -1885,6 +1885,49 @@ describe("DiceVision", function()
             assert.are.equal("number", type(captured))
         end)
 
+        it("characterizes table-roll card faces for type-remapped d20s", function()
+            -- The default d20 -> d10 mapping applies to ALL intercepted
+            -- rolls, table rolls included (per the user decision: the
+            -- native roller context opts in by default). Consequence
+            -- pinned here: a REAL d20 showing 14 on a table roll renders
+            -- on a 10-faced card die (value and total stay correct; the
+            -- mapping exists for Draw Steel d20-shaped d10s, whose values
+            -- never exceed 10).
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            DiceVision.pendingRoll = {
+                originalRoll = "1d20",
+                description = "Treasure Table",
+                isTableRoll = true,
+                completeWithResult = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            local rollData = {
+                dice = { { type = "d20", value = 14 } },
+                total = 14,
+            }
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            local card = nil
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "custom" then card = entry.message end
+            end
+            assert.is_not_nil(card)
+            assert.are.equal(10, card.dice[1].faces)
+            assert.are.equal(14, card.dice[1].value)
+            assert.are.equal(14, card.total)
+        end)
+
         it("maps percentile pair '00'+'0' to total 100", function()
             DiceVision.mode = "replace"
             DiceVision.connected = true
@@ -3704,6 +3747,155 @@ describe("DiceVision", function()
                 _G._dmhubRollLog[1].forcedDice)
         end)
 
+        it("characterizes the real-d20 divert under the default mapping", function()
+            -- Ships enabled by default: a REAL d20 rolled for a d20
+            -- expression is remapped to d10 by the default rule, so it can
+            -- never fill the d20 slot -> announced legacy fallback. The
+            -- notice must NAME the mapping -- the user rolled exactly the
+            -- right die, and 'wrong die types' alone would be a permanent,
+            -- undiagnosable puzzle.
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "1d20", creature = nil },
+                originalRoll = "1d20",
+                description = "Real d20 Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = { { type = "d20", value = 14 } },
+                total = 14,
+            })
+
+            assert.is_true(chatHas("wrong die types"))
+            assert.is_true(chatHas("type mapping d20 -> d10 was applied"))
+            assert.is_true(chatHas("/dv rules type"))
+            -- Legacy fallback keeps the roll value-correct.
+            local logged = _G._dmhubRollLog[1]
+            assert.are.equal("14", logged.roll)
+            assert.is_true(logged.instant)
+            assert.is_nil(logged.forcedDice)
+        end)
+
+        it("remapped dice survive keep-surplus reconciliation", function()
+            setupReplaceMode()
+            DiceVision.rules.diceSelection = { keep = "highest", count = 2 }
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Remap Keep Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d20", value = 7 },
+                    { type = "d20", value = 3 },
+                    { type = "d20", value = 5 },
+                },
+                total = 15,
+            })
+
+            -- All three remap to d10, keep-highest 2 selects 7 and 5, and
+            -- the remapped type must survive selection into the slots.
+            assert.are.same(
+                {{numFaces = 10, result = 7}, {numFaces = 10, result = 5}},
+                _G._dmhubRollLog[1].forcedDice)
+        end)
+
+        it("clamps a remapped misread before forcing when clamp is on", function()
+            setupReplaceMode()
+            DiceVision.rules.clampOutOfRange = true
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10", creature = nil },
+                originalRoll = "2d10",
+                description = "Remap Clamp Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            -- A d20-shaped die misread as 15: remap to d10, clamp 15 -> 1.
+            deliverRoll({
+                dice = {
+                    { type = "d20", value = 15 },
+                    { type = "d20", value = 7 },
+                },
+                total = 22,
+            })
+
+            assert.are.same(
+                {{numFaces = 10, result = 1}, {numFaces = 10, result = 7}},
+                _G._dmhubRollLog[1].forcedDice)
+        end)
+
+        it("falls back on a remapped out-of-range value when clamp is off", function()
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10", creature = nil },
+                originalRoll = "2d10",
+                description = "Remap Out-of-range Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d20", value = 15 },
+                    { type = "d20", value = 7 },
+                },
+                total = 22,
+            })
+
+            assert.is_true(chatHas("a die value out of range"))
+            assert.is_true(chatHas("type mapping d20 -> d10 was applied"))
+            local logged = _G._dmhubRollLog[1]
+            assert.are.equal("22", logged.roll)
+            assert.is_nil(logged.forcedDice)
+        end)
+
+        it("amends re-rolls with remapped Draw Steel dice", function()
+            setupReplaceMode()
+            local amendFormula, amendExtra
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Remap Re-roll Test",
+                edges = 0,
+                banes = 0,
+                isReroll = true,
+                amendWithResult = function(formula, extra)
+                    amendFormula = formula
+                    amendExtra = extra
+                end,
+                activeRoll = { id = "roll-1" },
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d20", value = 7 },
+                    { type = "d20", value = 3 },
+                },
+                total = 10,
+            })
+
+            assert.are.equal("2d10+5", amendFormula)
+            assert.are.same(
+                {{numFaces = 10, result = 7}, {numFaces = 10, result = 3}},
+                amendExtra.forcedDice)
+        end)
+
         it("characterizes the d10-centric clamp on non-d10 dice", function()
             -- Known limitation pinned on purpose: the clamp rule is defined
             -- as "outside 0-10 -> 1", so with clamp enabled a legitimate
@@ -4146,6 +4338,123 @@ describe("DiceVision", function()
 
             Commands.dv("rules clear all")
             assert.is_nil(next(DiceVision.rules.typeMappings))
+        end)
+
+        it("module load applied DEFAULT_RULES (not just the test helper)", function()
+            -- resetDiceVisionState overwrites rules with the helper's copy
+            -- of the defaults before every test; this asserts the snapshot
+            -- taken at module-load time, so deleting the DEFAULT_RULES
+            -- copy loop in DiceVision.lua fails a test.
+            assert.is_not_nil(_G._loadTimeRules)
+            assert.are.equal("d10", _G._loadTimeRules.d20TypeMapping)
+            assert.are.equal(10, _G._loadTimeRules.d10ZeroMapping)
+            assert.is_false(_G._loadTimeRules.typeMappingsOnPanel)
+        end)
+
+        it("legacy default-config path remaps Draw Steel dice end to end", function()
+            -- Production ships useForcedDice = false: the default user's
+            -- intercepted roll goes through the LEGACY collapse path, and
+            -- the remap + d10 0->10 value rule must fire there too.
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            assert.is_false(DiceVision.useForcedDice)
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10", creature = nil },
+                originalRoll = "2d10",
+                description = "Legacy Draw Steel Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            local rollData = {
+                dice = {
+                    { type = "d20", value = 7 },
+                    { type = "d20", value = 0 },
+                },
+                total = 7,
+            }
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            -- Legacy collapse: 7 + (0 -> 10) = 17.
+            local logged = _G._dmhubRollLog[1]
+            assert.are.equal("17", logged.roll)
+            assert.is_true(logged.instant)
+
+            -- The card (sent from the legacy complete wrapper) must show
+            -- remapped d10 faces and the mapped value.
+            logged.complete({})
+            local card = nil
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "custom" then card = entry.message end
+            end
+            assert.is_not_nil(card)
+            assert.are.equal(10, card.dice[1].faces)
+            assert.are.equal(10, card.dice[2].faces)
+            assert.are.equal(10, card.dice[2].value)
+            assert.are.equal(17, card.total)
+        end)
+
+        it("panel remapping cannot cause percentile misdetection", function()
+            -- Percentile detection takes the RAW dice; even with the panel
+            -- opt-in enabled, a Draw Steel pair reading 00 + 7 must post a
+            -- standard roll, not a bogus d100. Guard for the ordering: if
+            -- someone moves the remap ahead of detection, the remapped
+            -- d10s with these rawValues would misdetect.
+            DiceVision.rules.typeMappingsOnPanel = true
+            local rollData = {
+                dice = {
+                    { type = "d20", value = 0, rawValue = "00" },
+                    { type = "d20", value = 7, rawValue = "7" },
+                },
+                total = 7,
+            }
+            DiceVision.postRollToChat(rollData)
+            local msg = _G._chatLog[1].message
+            assert.are_not.equal("Percentile Roll (d100)", msg.description)
+            -- Standard panel message with remapped faces + 0->10 value rule.
+            assert.are.equal(10, msg.dice[1].faces)
+            assert.are.equal(10, msg.dice[1].value)
+            assert.are.equal(10, msg.dice[2].faces)
+            assert.are.equal(17, msg.total)
+        end)
+
+        it("keywords are case-insensitive in /dv rules type", function()
+            Commands.dv("rules type PANEL on")
+            assert.is_true(DiceVision.rules.typeMappingsOnPanel)
+
+            Commands.dv("rules type D20 CLEAR")
+            assert.is_nil(DiceVision.rules.typeMappings["d20"])
+        end)
+
+        it("rejects unforceable mapping targets", function()
+            Commands.dv("rules type d10 d100")
+            assert.is_nil(DiceVision.rules.typeMappings["d10"])
+            assert.is_true(chatHas("Target die must be one of"))
+        end)
+
+        it("setTypeMapping returns failure-specific reasons for the popup", function()
+            local ok, reason = DiceVision.setTypeMapping("d10", "d10")
+            assert.is_false(ok)
+            assert.are.equal("self", reason)
+
+            ok, reason = DiceVision.setTypeMapping("d10", "d100")
+            assert.is_false(ok)
+            assert.are.equal("target", reason)
+
+            ok, reason = DiceVision.setTypeMapping("banana", "d10")
+            assert.is_false(ok)
+            assert.are.equal("usage", reason)
         end)
     end)
 end)

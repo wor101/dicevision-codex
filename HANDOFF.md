@@ -269,7 +269,7 @@ dmhub.Roll{
 - `DiceRollLogic.extractExpectedDiceList(rollStr, creature)` computes the ordered face-count list the expression expects (engine `ParseRoll`/`RollToString` round-trip to strip boons, textual fallback otherwise). Supported dice: d4/d6/d8/d10/d12/d20 (d100 -> legacy fallback).
 - Type mappings apply first (Draw Steel's 20-sided d10s arrive as "d20" and would otherwise type-mismatch -- see "Draw Steel Physical Dice" below), then clamp + value-mapping rules (d10 0 -> 10, camera misreads). Keep-selection is NOT applied unless the user rolled more dice than expected and an explicit keep rule exists.
 - Known limitation: the clamp rule is d10-centric by definition (values outside 0-10 -> 1), so with clamp enabled a legitimate d20/d12 result above 10 is clamped to 1 and forced as such. Keep clamp off when rolling non-d10 dice. (Characterization test pins this.)
-- Detected fallbacks are announced in chat (`Physical dice do not match the roll (<reason>)`), not just the debug console, since count/type/range mismatches are player-actionable.
+- Detected fallbacks are announced in chat (`Physical dice do not match the roll (<reason>)`), not just the debug console, since count/type/range mismatches are player-actionable. When a die-type mapping contributed (e.g. a REAL d20 rolled for a d20 expression gets diverted by the default `d20 -> d10` rule), the notice names the mapping and points at `/dv rules type`; successful remaps leave a debug-console breadcrumb.
 - `DiceRollLogic.buildForcedDice(dice, expectedFaces)` matches physical dice to expected faces by type; refuses on count-mismatch / type-mismatch / out-of-range (never partial-force).
 - Deliberately NOT done on this path (all legacy-only workarounds for the collapsed literal): boons/banes field splitting, `multitargets[1]` zeroing, `instant = true`, `overrideTier` injection.
 - Re-rolls: `amendWithResult(originalRoll, { forcedDice = forcedDice })` - `doRerollAmend` (dialog Lua in DSRollDialog.lua / EmbeddedRollDialog.lua) merges extraFields into amendArgs before `Amend()`; requires a dialog version whose `doRerollAmend` accepts extraFields.
@@ -410,7 +410,7 @@ DiceVision.rules = {
 |----------|---------|------------|
 | `applyTypeMappings(dice, mappings)` | Remap die types (e.g., d20 -> d10) | dice array, mapping table |
 | `clampOutOfRangeValues(dice, isEnabled)` | Clamp values outside 0-10 to 1 | dice array, boolean |
-| `applyValueMappings(dice, mappings)` | Apply value remapping (e.g., 0→10) | dice array, mapping table |
+| `applyValueMappings(dice, mappings)` | Apply value remapping (e.g., 0 -> 10) | dice array, mapping table |
 | `applyDiceSelection(dice, selection)` | Keep highest/lowest N dice | dice array, selection config |
 | `detectDiceSelection(pendingRoll)` | Auto-detect numKeep from roll context | pendingRoll object |
 | `getEffectiveRules(pendingRoll)` | Merge manual rules with auto-detection | pendingRoll object |
@@ -440,11 +440,11 @@ function applyDiceRules(dice, pendingRoll)
 end
 ```
 
-Percentile detection (`detectPercentilePair`) runs on RAW dice on the panel and table paths, before any rules -- type mappings cannot cause d100 misdetection.
+Percentile detection (`detectPercentilePair`) always takes the RAW `rollData.dice` array (panel path: top of `postRollToChat`; table path: inside `handlePendingRoll`), never the rule-processed copy -- so type mappings cannot cause d100 misdetection. Note the table path runs `buildDiceMessage` (and therefore the rules) BEFORE detection chronologically; the protection is the raw input, not the ordering.
 
 ### Draw Steel Physical Dice (why type mappings exist)
 
-MCDM's official Draw Steel dice are 20-sided but numbered 1-10 twice. The dice-vision camera classifies dice by physical shape (its taxonomy is d4/d6/d8/d10/d12/d20 only), so these dice arrive as `{type = "d20", value = 1..10}` and would type-mismatch against a `2d10` expression on the forcedDice path. The default `d20 -> d10` type mapping remaps them for intercepted rolls; panel rolls are freeform (a physical d20 might really be a d20), so they only remap when `typeMappingsOnPanel` is enabled.
+MCDM's official Draw Steel dice are 20-sided but numbered 1-10 twice. The dice-vision camera classifies dice by physical shape (its taxonomy is d4/d6/d8/d10/d12/d20 only -- see `DiceType` in dice-vision `backend/app/models/shared_types.py`), so these dice arrive as `{type = "d20", value = 1..10}` and would type-mismatch against a `2d10` expression on the forcedDice path. The default `d20 -> d10` type mapping remaps them for intercepted rolls; panel rolls are freeform (a physical d20 might really be a d20), so they only remap when `typeMappingsOnPanel` is enabled.
 
 ### Rules Commands
 

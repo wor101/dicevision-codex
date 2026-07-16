@@ -119,7 +119,11 @@ end
 -- 20-sided but numbered 1-10 twice, so the camera (which classifies by
 -- shape) reports them as "d20" while every Draw Steel expression wants
 -- d10s. mappings is { [fromType] = toType }, e.g. { ["d20"] = "d10" }.
--- Remapped dice keep all fields and record originalType for provenance.
+-- Mappings are applied in a SINGLE PASS from the original type -- no
+-- chaining: with {d20="d12", d12="d10"} a d20 becomes a d12, not a d10,
+-- and a d20<->d10 swap cycle is safe.
+-- Remapped dice keep all fields and record originalType, which
+-- tryForcedDicePath reads to explain mapping-caused fallbacks.
 function DiceRollLogic.applyTypeMappings(dice, mappings)
     if not mappings or next(mappings) == nil then
         return dice
@@ -149,11 +153,14 @@ function DiceRollLogic.applyValueMappings(dice, mappings)
         local dieType = die.type
         local typeMapping = mappings[dieType] or mappings["*"] or {}
         local newValue = typeMapping[die.value] or die.value
-        result[i] = {
-            type = die.type,
-            value = newValue,
-            originalValue = (newValue ~= die.value) and die.value or nil,
-        }
+        -- Full copy so provenance fields set by earlier stages
+        -- (originalType from applyTypeMappings, originalValue from
+        -- clampOutOfRangeValues) survive this rebuild.
+        local copy = {}
+        for k, v in pairs(die) do copy[k] = v end
+        copy.value = newValue
+        copy.originalValue = (newValue ~= die.value) and die.value or die.originalValue
+        result[i] = copy
     end
     return result
 end
@@ -170,11 +177,13 @@ function DiceRollLogic.clampOutOfRangeValues(dice, isEnabled)
             clamped = 1
             print(string.format("[DiceVision] Clamped %s value %d -> 1 (out of 0-10 range)", die.type, value))
         end
-        result[i] = {
-            type = die.type,
-            value = clamped,
-            originalValue = (clamped ~= value) and value or die.originalValue,
-        }
+        -- Full copy: keep provenance fields from earlier stages (see
+        -- applyValueMappings).
+        local copy = {}
+        for k, v in pairs(die) do copy[k] = v end
+        copy.value = clamped
+        copy.originalValue = (clamped ~= value) and value or die.originalValue
+        result[i] = copy
     end
     return result
 end
@@ -309,6 +318,18 @@ end
 local SUPPORTED_FORCED_DICE = {
     [4] = true, [6] = true, [8] = true, [10] = true, [12] = true, [20] = true,
 }
+
+--- True if dieType names a die the engine can render/force ("d4".."d20").
+-- Used to validate type-mapping TARGETS: mapping to an unforceable type
+-- (d0, d100, ...) would guarantee a permanent forced-path fallback and feed
+-- bogus face counts to the chat card icons.
+function DiceRollLogic.isSupportedDieType(dieType)
+    if type(dieType) ~= "string" then
+        return false
+    end
+    local faces = tonumber(dieType:match("^[dD](%d+)$"))
+    return faces ~= nil and SUPPORTED_FORCED_DICE[faces] == true
+end
 
 --- Extract the ordered, flattened list of dice face counts a roll expression
 -- expects (e.g. "2d10+3 1 bane" -> {10, 10}). Used to build the forcedDice

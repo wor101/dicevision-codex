@@ -702,12 +702,18 @@ CreateDiceVisionPanel = function()
         typeTo = gui.Input{ classes = "dvSetInput", width = 48, lineType = "SingleLine", placeholderText = "to", text = "" }
         typeAddStatus = gui.Label{ classes = "dvSetInfo", width = "100%", height = "auto", text = "" }
         local typeAddBtn = buildButton("Add", function()
-            -- Same popup-local feedback pattern as the value-mapping Add.
-            if DiceVision.setTypeMapping(typeFrom.text, typeTo.text) then
+            -- Same popup-local feedback pattern as the value-mapping Add,
+            -- but failure-specific: the seam returns a reason key.
+            local ok, reason = DiceVision.setTypeMapping(typeFrom.text, typeTo.text)
+            if ok then
                 typeFrom.text = ""
                 typeTo.text = ""
                 typeAddStatus.text = ""
                 rebuildTypeRows()
+            elseif reason == "self" then
+                typeAddStatus.text = "Mapping must change the die type"
+            elseif reason == "target" then
+                typeAddStatus.text = "Target must be d4/d6/d8/d10/d12/d20"
             else
                 typeAddStatus.text = "Enter two die types (e.g. d20 d10)"
             end

@@ -1212,6 +1212,68 @@ describe("applyTypeMappings", function()
         assert.are.equal("d10", result[1].type)
         assert.is_nil(result[1].originalType)
     end)
+
+    it("applies mappings in a single pass with no chaining", function()
+        -- {d20 -> d12, d12 -> d10}: a d20 becomes a d12, NOT a d10. A
+        -- future fixpoint 'improvement' would change results silently (or
+        -- infinite-loop on a swap cycle) -- this pins the contract.
+        local result = DiceRollLogic.applyTypeMappings(
+            {{type = "d20", value = 7}, {type = "d12", value = 5}},
+            {["d20"] = "d12", ["d12"] = "d10"})
+        assert.are.equal("d12", result[1].type)
+        assert.are.equal("d10", result[2].type)
+    end)
+
+    it("handles a swap cycle safely", function()
+        local result = DiceRollLogic.applyTypeMappings(
+            {{type = "d20", value = 7}, {type = "d10", value = 5}},
+            {["d20"] = "d10", ["d10"] = "d20"})
+        assert.are.equal("d10", result[1].type)
+        assert.are.equal("d20", result[2].type)
+    end)
+end)
+
+describe("provenance fields survive the rules pipeline", function()
+    it("originalType survives clampOutOfRangeValues and applyValueMappings", function()
+        local dice = DiceRollLogic.applyTypeMappings(
+            {{type = "d20", value = 0}},
+            {["d20"] = "d10"})
+        dice = DiceRollLogic.clampOutOfRangeValues(dice, true)
+        dice = DiceRollLogic.applyValueMappings(dice, {["d10"] = {[0] = 10}})
+        assert.are.equal("d10", dice[1].type)
+        assert.are.equal("d20", dice[1].originalType)
+        assert.are.equal(10, dice[1].value)
+    end)
+
+    it("clamp's originalValue survives applyValueMappings", function()
+        -- Regression pin: applyValueMappings used to rebuild dice with
+        -- originalValue=nil for unmapped values, erasing the clamp's
+        -- record of what the camera actually read.
+        local dice = DiceRollLogic.clampOutOfRangeValues(
+            {{type = "d10", value = 15}}, true)
+        assert.are.equal(15, dice[1].originalValue)
+        dice = DiceRollLogic.applyValueMappings(dice, {["d10"] = {[0] = 10}})
+        assert.are.equal(15, dice[1].originalValue)
+        assert.are.equal(1, dice[1].value)
+    end)
+end)
+
+describe("isSupportedDieType", function()
+    it("accepts the six engine-renderable dice", function()
+        for _, dieType in ipairs({"d4", "d6", "d8", "d10", "d12", "d20"}) do
+            assert.is_true(DiceRollLogic.isSupportedDieType(dieType))
+        end
+        assert.is_true(DiceRollLogic.isSupportedDieType("D10"))
+    end)
+
+    it("rejects unforceable or malformed types", function()
+        assert.is_false(DiceRollLogic.isSupportedDieType("d100"))
+        assert.is_false(DiceRollLogic.isSupportedDieType("d0"))
+        assert.is_false(DiceRollLogic.isSupportedDieType("d1000"))
+        assert.is_false(DiceRollLogic.isSupportedDieType("banana"))
+        assert.is_false(DiceRollLogic.isSupportedDieType(nil))
+        assert.is_false(DiceRollLogic.isSupportedDieType(10))
+    end)
 end)
 
 describe("applyDiceRules type-mapping context gating", function()

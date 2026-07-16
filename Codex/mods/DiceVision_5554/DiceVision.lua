@@ -693,12 +693,44 @@ local function tryForcedDicePath(pendingRoll, rollData, diceForMessage, diceSum)
         processed = DiceRollLogic.applyDiceSelection(processed, DiceVision.rules.diceSelection)
     end
 
+    -- Collect which type mappings actually fired (originalType is set by
+    -- applyTypeMappings and carried through the later stages). Failures
+    -- must name them: a REAL d20 rolled for a d20 expression is diverted
+    -- by the default d20 -> d10 mapping, and blaming "wrong die types"
+    -- without naming the mapping would leave the user a permanent,
+    -- undiagnosable puzzle.
+    local appliedMappings = {}
+    do
+        local seen = {}
+        for _, die in ipairs(processed) do
+            if die.originalType then
+                local text = die.originalType .. " -> " .. die.type
+                if not seen[text] then
+                    seen[text] = true
+                    appliedMappings[#appliedMappings + 1] = text
+                end
+            end
+        end
+        table.sort(appliedMappings)
+    end
+
     local forcedDice, reason = DiceRollLogic.buildForcedDice(processed, expected)
     if not forcedDice then
         print(string.format("DV: forcedDice - %s; using legacy path", tostring(reason)))
-        chat.Send(string.format("[DiceVision] Physical dice do not match the roll (%s); using the legacy result",
-            FORCED_DICE_REASON_TEXT[reason] or tostring(reason)))
+        local notice = string.format("[DiceVision] Physical dice do not match the roll (%s); using the legacy result",
+            FORCED_DICE_REASON_TEXT[reason] or tostring(reason))
+        if #appliedMappings > 0 then
+            notice = notice .. string.format(" (note: type mapping %s was applied; see /dv rules type)",
+                table.concat(appliedMappings, ", "))
+        end
+        chat.Send(notice)
         return false
+    end
+    if #appliedMappings > 0 then
+        -- Success-path breadcrumb so "why did my roll show X" reports are
+        -- diagnosable: same-face fills after a remap are silent by design.
+        print(string.format("DV: forcedDice - type mappings applied: %s",
+            table.concat(appliedMappings, ", ")))
     end
 
     -- Optional chat card (off by default on this path: the engine's native
@@ -1236,17 +1268,26 @@ DiceVision.removeValueMapping = function(dieType, fromVal)
     return true
 end
 
+-- Returns true on success, or false plus a reason key ("usage" | "target" |
+-- "self") so the popup can show a failure-specific message; the chat line
+-- already carries the specific reason for command users.
 DiceVision.setTypeMapping = function(fromType, toType)
     fromType = type(fromType) == "string" and fromType:lower() or nil
     toType = type(toType) == "string" and toType:lower() or nil
     if not (fromType and toType
         and fromType:match("^d%d+$") and toType:match("^d%d+$")) then
         chat.Send("[DiceVision] Usage: /dv rules type <fromDie> <toDie> (e.g. /dv rules type d20 d10)")
-        return false
+        return false, "usage"
+    end
+    -- The target must be a die the engine can render/force; mapping to
+    -- d0/d100/etc. would guarantee a permanent forced-path fallback.
+    if not DiceRollLogic.isSupportedDieType(toType) then
+        chat.Send("[DiceVision] Target die must be one of: d4, d6, d8, d10, d12, d20")
+        return false, "target"
     end
     if fromType == toType then
         chat.Send("[DiceVision] Type mapping must change the die type")
-        return false
+        return false, "self"
     end
     DiceVision.rules.typeMappings[fromType] = toType
     chat.Send(string.format("[DiceVision] Type mapping: %s -> %s", fromType, toType))
@@ -1552,8 +1593,12 @@ Commands.dv = function(args)
             DiceVision.setValueMapping(parts[3], parts[4], parts[5])
 
         elseif action == "type" then
-            local arg3 = parts[3]
-            local arg4 = parts[4]
+            -- Lowercase both args: die types are case-normalized by the
+            -- setters anyway, and this makes the keywords (panel/clear/
+            -- on/off) case-insensitive instead of chatting the wrong
+            -- usage line for e.g. "/dv rules type PANEL on".
+            local arg3 = parts[3] and parts[3]:lower()
+            local arg4 = parts[4] and parts[4]:lower()
             if arg3 == "panel" then
                 if arg4 == "on" then
                     DiceVision.setTypeMappingsOnPanel(true)
