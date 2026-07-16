@@ -504,6 +504,23 @@ describe("DiceVision", function()
             -- dmhub.GetDiceStyling returns {} in tests, so fallback is "#ffffff"
             assert.are.equal("#ffffff", label.color)
         end)
+
+        it("renders a d3 on the d6 icon with the d3 value", function()
+            -- No d3 icon exists; the card mirrors the official panel's
+            -- "d3 uses the d6 model". Only the icon falls back - the
+            -- value label must still show the d3 result.
+            local panel = DiceVisionRollMessage.CreateDiePanel(3, 2)
+            assert.are.equal("ui-icons/d6-filled.png", panel.bgimage)
+            local innerPanel = panel[1]
+            assert.are.equal("ui-icons/d6.png", innerPanel.bgimage)
+            local label = innerPanel[1]
+            assert.are.equal("2", label.text)
+        end)
+
+        it("does not remap icons for other face counts", function()
+            local panel = DiceVisionRollMessage.CreateDiePanel(10, 7)
+            assert.are.equal("ui-icons/d10-filled.png", panel.bgimage)
+        end)
     end)
 
     -- ============================================================================
@@ -3823,6 +3840,8 @@ describe("DiceVision", function()
 
             assert.is_true(chatHas("wrong die types"))
             assert.is_true(chatHas("type mapping d6 -> d3 was applied"))
+            -- The literal escape hatch at the moment of friction.
+            assert.is_true(chatHas("remove with /dv rules type d6 clear"))
             local logged = _G._dmhubRollLog[1]
             assert.are.equal("4", logged.roll)
             assert.is_true(logged.instant)
@@ -3854,7 +3873,7 @@ describe("DiceVision", function()
 
             assert.is_true(chatHas("wrong die types"))
             assert.is_true(chatHas("type mapping d20 -> d10 was applied"))
-            assert.is_true(chatHas("/dv rules type"))
+            assert.is_true(chatHas("remove with /dv rules type d20 clear"))
             -- Legacy fallback keeps the roll value-correct.
             local logged = _G._dmhubRollLog[1]
             assert.are.equal("14", logged.roll)
@@ -4072,6 +4091,51 @@ describe("DiceVision", function()
             assert.is_false(DiceVision.useForcedDice)
             assert.is_true(chatHas("WARNING"))
             assert.is_true(chatHas("VIRTUAL dice"))
+            -- The discarded physical values must be reported so the
+            -- director can adjudicate the spoiled roll.
+            assert.is_true(chatHas("which read: 7, 3"))
+        end)
+
+        it("notes once when a roll cannot be verified, without disabling", function()
+            -- honored == nil (no readable rolls on rollInfo) must not
+            -- auto-disable on uncertainty, but on an odd build it would
+            -- otherwise be a silent repeated discard - say it once.
+            setupReplaceMode()
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Unverifiable Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            deliverRoll({
+                dice = {
+                    { type = "d10", value = 7 },
+                    { type = "d10", value = 3 },
+                },
+                total = 10,
+            })
+
+            _G._dmhubRollLog[1].complete({})
+
+            assert.is_true(DiceVision.useForcedDice)
+            assert.is_true(chatHas("could not verify the engine honored"))
+            assert.is_true(DiceVision.warnedUnverifiedForcedDice)
+
+            -- Second unverifiable completion: no repeat note.
+            local before = #_G._chatLog
+            _G._dmhubRollLog[1].complete({})
+            local newNotes = 0
+            for i = before + 1, #_G._chatLog do
+                if _G._chatLog[i].type == "send"
+                    and string.find(_G._chatLog[i].message, "could not verify", 1, true) then
+                    newNotes = newNotes + 1
+                end
+            end
+            assert.are.equal(0, newNotes)
         end)
 
         it("stays enabled when the engine honored forcedDice", function()
@@ -4437,6 +4501,97 @@ describe("DiceVision", function()
             -- unsupported builds), chat card off.
             assert.is_true(_G._loadTimeRules.useForcedDice)
             assert.is_false(_G._loadTimeRules.forcedDiceChatCard)
+        end)
+
+        it("drives a roll at the exact shipped defaults", function()
+            -- Behavior pin for the production configuration, not just the
+            -- value snapshot: restore the load-time toggles over the
+            -- fixture baseline (rules already match the shipped defaults,
+            -- asserted here) and confirm a Draw Steel roll takes the
+            -- forced path.
+            assert.are.equal("d10", DiceVision.rules.typeMappings["d20"])
+            assert.are.equal("d3", DiceVision.rules.typeMappings["d6"])
+            assert.are.equal(10, DiceVision.rules.valueMappings["d10"][0])
+            DiceVision.useForcedDice = _G._loadTimeRules.useForcedDice
+            DiceVision.forcedDiceChatCard = _G._loadTimeRules.forcedDiceChatCard
+            assert.is_true(DiceVision.useForcedDice)
+
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "2d10+5", creature = nil },
+                originalRoll = "2d10+5",
+                description = "Shipped Defaults Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            local rollData = {
+                dice = {
+                    { type = "d20", value = 7 },
+                    { type = "d20", value = 0 },
+                },
+                total = 7,
+            }
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            local logged = _G._dmhubRollLog[1]
+            assert.are.equal("2d10+5", logged.roll)
+            assert.are.same(
+                {{numFaces = 10, result = 7}, {numFaces = 10, result = 10}},
+                logged.forcedDice)
+        end)
+
+        it("legacy path card shows faces 3 for a remapped d3", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            DiceVision.useForcedDice = false
+            DiceVision.pendingRoll = {
+                rollArgs = { roll = "1d3", creature = nil },
+                originalRoll = "1d3",
+                description = "Legacy d3 Card Test",
+                edges = 0,
+                banes = 0,
+                setActiveRoll = function() end,
+            }
+            DiceVision.waitingForRoll = true
+
+            local rollData = {
+                dice = { { type = "d6", value = 2 } },
+                total = 2,
+            }
+            local originalNetGet = net.Get
+            net.Get = function(args)
+                if args.success then
+                    args.success({ rolls = { rollData } })
+                end
+            end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            net.Get = originalNetGet
+
+            local logged = _G._dmhubRollLog[1]
+            assert.are.equal("2", logged.roll)
+            logged.complete({})
+            local card = nil
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "custom" then card = entry.message end
+            end
+            assert.is_not_nil(card)
+            assert.are.equal(3, card.dice[1].faces)
+            assert.are.equal(2, card.dice[1].value)
         end)
 
         it("legacy path remaps Draw Steel dice end to end", function()

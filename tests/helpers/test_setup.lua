@@ -191,6 +191,7 @@ _G.resetDiceVisionState = function()
     -- production default itself is pinned via _loadTimeRules.
     DiceVision.useForcedDice = false
     DiceVision.forcedDiceChatCard = false
+    DiceVision.warnedUnverifiedForcedDice = false
 
     -- Reset panel state
     DiceVision.panelWaitingForRoll = false

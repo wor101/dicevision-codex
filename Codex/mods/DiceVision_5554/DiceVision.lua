@@ -34,11 +34,16 @@ DiceVision = {
     -- accepts a forcedDice table). Defaults ON: support cannot be
     -- feature-detected from Lua, but the post-roll verification in
     -- tryForcedDicePath auto-disables it with a chat warning on an
-    -- unsupported build, so at most one roll is affected there.
+    -- unsupported build, so typically one roll per session is affected
+    -- there (the disable is in-memory and re-arms on reload).
     -- In-memory only, like mode/rules (dmhub.SetSettingValue is the
     -- option if persistence is ever wanted).
     useForcedDice = true,
     forcedDiceChatCard = false,  -- custom chat card off by default on the forcedDice path
+    -- One-per-load notice flag: fires when a roll's forcedDice honor check
+    -- returns nil (rollInfo carried no readable dice), which would
+    -- otherwise be a silent, repeated discard on an odd build.
+    warnedUnverifiedForcedDice = false,
 
     -- Panel-specific state (independent of replace mode)
     panelWaitingForRoll = false,
@@ -656,8 +661,9 @@ end
 -- build without forcedDice support: the engine silently ignores the field
 -- and rolls VIRTUAL dice, discarding the physical values. The complete
 -- wrapper below verifies the rolled faces post-roll and auto-disables the
--- toggle with a loud chat warning on a confirmed mismatch, so at most the
--- first roll after enabling is affected.
+-- toggle with a loud chat warning on a confirmed mismatch, so typically
+-- one roll per session is affected (the in-memory disable re-arms on
+-- reload).
 -- User-facing wording for buildForcedDice refusal reasons. These are
 -- actionable (the player rolled the wrong physical dice), so the fallback
 -- is announced in chat rather than only in the debug console.
@@ -702,6 +708,7 @@ local function tryForcedDicePath(pendingRoll, rollData, diceForMessage, diceSum)
     -- without naming the mapping would leave the user a permanent,
     -- undiagnosable puzzle.
     local appliedMappings = {}
+    local appliedFrom = {}
     do
         local seen = {}
         for _, die in ipairs(processed) do
@@ -710,6 +717,7 @@ local function tryForcedDicePath(pendingRoll, rollData, diceForMessage, diceSum)
                 if not seen[text] then
                     seen[text] = true
                     appliedMappings[#appliedMappings + 1] = text
+                    appliedFrom[#appliedFrom + 1] = die.originalType
                 end
             end
         end
@@ -722,8 +730,15 @@ local function tryForcedDicePath(pendingRoll, rollData, diceForMessage, diceSum)
         local notice = string.format("[DiceVision] Physical dice do not match the roll (%s); using the legacy result",
             FORCED_DICE_REASON_TEXT[reason] or tostring(reason))
         if #appliedMappings > 0 then
-            notice = notice .. string.format(" (note: type mapping %s was applied; see /dv rules type)",
-                table.concat(appliedMappings, ", "))
+            -- Give the one-line escape hatch at the moment of friction:
+            -- e.g. a REAL d6 rolled for a d6 expression can only be fixed
+            -- by clearing the default d6 -> d3 mapping.
+            local remedy = "see /dv rules type"
+            if #appliedFrom == 1 then
+                remedy = string.format("remove with /dv rules type %s clear", appliedFrom[1])
+            end
+            notice = notice .. string.format(" (note: type mapping %s was applied; %s)",
+                table.concat(appliedMappings, ", "), remedy)
         end
         chat.Send(notice)
         return false
@@ -809,9 +824,25 @@ local function tryForcedDicePath(pendingRoll, rollData, diceForMessage, diceSum)
     -- cosmetic failure can never block Codex's own completion logic.
     local originalComplete = rollArgs.complete
     copy.complete = function(rollInfo)
-        if DiceRollLogic.forcedDiceHonored(rollInfo, forcedDice) == false then
+        local honored = DiceRollLogic.forcedDiceHonored(rollInfo, forcedDice)
+        if honored == false then
             DiceVision.useForcedDice = false
-            chat.Send("[DiceVision] WARNING: this Codex build ignored forcedDice - the roll used VIRTUAL dice, not your physical values. forcedDice disabled; update Codex and re-enable with /dv forceddice on.")
+            -- Report the discarded physical values so the director can
+            -- adjudicate the one spoiled roll on the spot.
+            local values = {}
+            for _, entry in ipairs(forcedDice) do
+                values[#values + 1] = tostring(entry.result)
+            end
+            chat.Send(string.format(
+                "[DiceVision] WARNING: this Codex build ignored forcedDice - the roll used VIRTUAL dice, not your physical values (which read: %s). forcedDice disabled; update Codex and re-enable with /dv forceddice on.",
+                table.concat(values, ", ")))
+        elseif honored == nil and not DiceVision.warnedUnverifiedForcedDice then
+            -- Cannot verify either way (no readable rolls on rollInfo).
+            -- Do NOT auto-disable on uncertainty, but say it once: on an
+            -- odd build this would otherwise be a silent, repeated
+            -- discard of the physical values.
+            DiceVision.warnedUnverifiedForcedDice = true
+            chat.Send("[DiceVision] Note: could not verify the engine honored the physical dice for this roll. If results ignore your physical dice, run /dv forceddice off.")
         end
         if visualMessage then
             pcall(chat.SendCustom, visualMessage)
@@ -1343,7 +1374,7 @@ end
 DiceVision.setUseForcedDice = function(enabled)
     DiceVision.useForcedDice = enabled and true or false
     if DiceVision.useForcedDice then
-        chat.Send("[DiceVision] forcedDice enabled. Requires a Codex build with dmhub.Roll forcedDice support: an older build silently rolls VIRTUAL dice instead. DiceVision verifies each roll and auto-disables with a warning if that happens.")
+        chat.Send("[DiceVision] forcedDice enabled. Requires a Codex build with dmhub.Roll forcedDice support: an older build silently rolls VIRTUAL dice instead. DiceVision verifies each initial roll and auto-disables with a warning if that happens.")
     else
         chat.Send("[DiceVision] forcedDice disabled (legacy deterministic-total path)")
     end

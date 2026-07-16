@@ -776,7 +776,8 @@ CreateDiceVisionPanel = function()
             },
             testLine,
 
-            -- Forced dice (engine forcedDice support; needs a new Codex build)
+            -- Forced dice (engine forcedDice path; default on, auto-disables
+            -- on unsupported Codex builds)
             gui.Label{ classes = "dvSetHeader", text = "Forced Dice" },
             gui.Panel{
                 flow = "horizontal", width = "100%", height = "auto", valign = "center",

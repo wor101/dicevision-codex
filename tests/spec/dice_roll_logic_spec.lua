@@ -1545,4 +1545,29 @@ describe("forcedDiceHonored", function()
         assert.is_nil(DiceRollLogic.forcedDiceHonored(info, nil))
         assert.is_nil(DiceRollLogic.forcedDiceHonored(info, {}))
     end)
+
+    it("accepts a 6-faced rolled die for a forced d3 entry", function()
+        -- The engine renders d3 on the d6 model; whether rollInfo.rolls
+        -- reports 3 or 6 faces is unverifiable from Lua, so either must
+        -- pass or a 6-faced report would deterministically auto-disable
+        -- the feature on every 1d3 roll.
+        assert.is_true(DiceRollLogic.forcedDiceHonored(
+            { rolls = {{ result = 2, numFaces = 6 }} },
+            {{numFaces = 3, result = 2}}))
+        assert.is_true(DiceRollLogic.forcedDiceHonored(
+            { rolls = {{ result = 2, numFaces = 3 }} },
+            {{numFaces = 3, result = 2}}))
+    end)
+
+    it("still detects a mismatched result on a d3 entry", function()
+        assert.is_false(DiceRollLogic.forcedDiceHonored(
+            { rolls = {{ result = 5, numFaces = 6 }} },
+            {{numFaces = 3, result = 2}}))
+    end)
+
+    it("does not extend the d3 equivalence to other face counts", function()
+        assert.is_false(DiceRollLogic.forcedDiceHonored(
+            { rolls = {{ result = 7, numFaces = 20 }} },
+            {{numFaces = 10, result = 7}}))
+    end)
 end)
