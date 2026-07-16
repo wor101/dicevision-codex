@@ -278,6 +278,12 @@ dmhub.Roll{
 - **Verification is best-effort and NON-DISABLING.** The `complete` wrapper never sets `useForcedDice = false`. History: a post-roll comparison of `rollInfo.rolls` against the forced values (`DiceRollLogic.forcedDiceHonored`) produced false negatives that disabled a WORKING feature, because Codex's `doRerollAmend` reuses and RE-FIRES the initial roll's `complete` wrapper with the reroll's `rollInfo` (and for a power roll the reroll fires BEFORE the initial completion), while the closure still holds the initial forced set -- so the value comparison saw a mismatch even though the engine honored the dice. Three attempts to make the comparison robust (deterministic latch, global latch, per-roll `checked`) all failed against this ordering. The wrapper now keeps only one signal: a single quiet, once-per-session note when the engine returns NO readable dice at all (`forcedDiceHonored == nil`). Rerolls yield a value mismatch (`false`), not `nil`, so they never trigger it, and an old build that returns readable-but-virtual dice is not auto-detected -- the user turns it off with `/dv forceddice off`. `warnedUnverifiedForcedDice` gates the note and re-arms on connect and `/dv forceddice on`.
 - An uncaught Lua error inside `tryForcedDicePath` is caught by a `pcall` at the fork in `handlePendingRoll` and falls through to legacy; without it the error would strand `isPolling=true` and wedge all subsequent rolls.
 
+**Panel rolls (`tryPanelForcedDice`, same `useForcedDice` gate):** a panel-triggered roll has no pending Codex roll and thus no expression, so the mod builds one FROM the physical dice themselves -- grouped by face count, largest die first (two d10s + a d6 -> `"2d10+1d6"`, `DiceRollLogic.buildPanelRollExpression`) -- and calls `dmhub.Roll` with it plus the matching `forcedDice` table. The virtual dice tumble to the physical values and the engine posts its own chat entry; the roll stays cosmetic (no `creature`/`properties`, no game effect), same as the chat-card-only display it upgrades. Details:
+- Dice are rule-processed by the same `buildDiceMessage`/`applyDiceRules` pass that feeds the card display (panel semantics: type mappings only with `typeMappingsOnPanel`; clamp/value-map/keep always; keep-rule drops excluded from the expression). `buildDiceMessage` returns the processed dice as a third value for this.
+- Percentile (d100) pairs are detected FIRST and stay on the chat-card display (`postRollToChat`) -- d100 is not a forceable type and the card has dedicated percentile rendering.
+- Any detected failure (unsupported die type, out-of-range value) or uncaught error (pcall at the dispatch in `handleDiceVisionRoll`) falls back to `postRollToChat`; failures are print-only (no chat notice) since there is no expression the dice can mismatch and the fallback card still shows the result. Never auto-disables.
+- The same non-disabling `complete` wrapper applies: one quiet, once-per-session note (shared `warnedUnverifiedForcedDice` flag) when the engine returns no readable dice, and the optional `forcedDiceChatCard` card (a `rollSource="panel"` card, sent pcall'd after completion). `panelTokenId` is passed as `tokenid` and cleared only on success so a fallback card keeps its token attribution.
+
 **Legacy collapse path (fallback, or `/dv forceddice off`) - two code paths based on targeting:**
 
 **Non-Targeted Rolls (no multitargets):**
@@ -371,7 +377,7 @@ Edges and banes cancel 1-for-1. Apply rules based on net (edges - banes):
 | `/dv status` | Show connection status |
 | `/dv mode <off\|replace>` | Set operation mode |
 | `/dv rules <subcommand>` | Configure dice processing rules |
-| `/dv forceddice <on\|off>` | Use engine forcedDice (default on; never auto-disables, turn off manually on unsupported builds) |
+| `/dv forceddice <on\|off>` | Use engine forcedDice, including panel rolls (default on; never auto-disables, turn off manually on unsupported builds) |
 | `/dv forceddice card <on\|off>` | DiceVision chat card on the forcedDice path (default off) |
 | `/dv test` | Test API connection |
 
@@ -442,7 +448,7 @@ function applyDiceRules(dice, pendingRoll)
 end
 ```
 
-Percentile detection (`detectPercentilePair`) always takes the RAW `rollData.dice` array (panel path: top of `postRollToChat`; table path: inside `handlePendingRoll`), never the rule-processed copy -- so type mappings cannot cause d100 misdetection. Note the table path runs `buildDiceMessage` (and therefore the rules) BEFORE detection chronologically; the protection is the raw input, not the ordering.
+Percentile detection (`detectPercentilePair`) always takes the RAW `rollData.dice` array (panel path: top of `tryPanelForcedDice` and of `postRollToChat`; table path: inside `handlePendingRoll`), never the rule-processed copy -- so type mappings cannot cause d100 misdetection. Note the table path runs `buildDiceMessage` (and therefore the rules) BEFORE detection chronologically; the protection is the raw input, not the ordering.
 
 ### Draw Steel Physical Dice (why type mappings exist)
 
