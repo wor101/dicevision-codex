@@ -390,6 +390,7 @@ local removeRollInterceptor
 local abandonPendingRoll    -- Used by longPollForRolls, setMode
 local handlePendingRoll     -- Used by handleDiceVisionRoll
 local postRollToChat        -- Used by handleDiceVisionRoll
+local tryPanelForcedDice    -- Used by handleDiceVisionRoll
 local longPollForRolls      -- Recursive call
 local onBeforeRoll          -- Used by /dv connect, registered on RollDialog.OnBeforeRoll
 local onReroll              -- Used by /dv connect, registered on RollDialog.OnReroll
@@ -446,9 +447,21 @@ local function handleDiceVisionRoll(rollData)
     print(string.format("DV: handleDiceVisionRoll - panelWaiting=%s, mode=%s, waitingForRoll=%s, dice=%s",
         tostring(DiceVision.panelWaitingForRoll), DiceVision.mode, tostring(DiceVision.waitingForRoll),
         formatDice(rollData.dice)))
-    -- Handle panel-initiated roll first
+    -- Handle panel-initiated roll first. With forcedDice on, show the roll
+    -- as engine virtual dice landing on the physical values; any detected
+    -- failure or error falls back to the chat-card-only display.
     if DiceVision.panelWaitingForRoll then
-        postRollToChat(rollData)
+        local handled = false
+        if DiceVision.useForcedDice then
+            local ok, result = pcall(tryPanelForcedDice, rollData)
+            handled = ok and result == true
+            if not ok then
+                print("DV: panel forcedDice - error: " .. tostring(result) .. "; using chat-only display")
+            end
+        end
+        if not handled then
+            postRollToChat(rollData)
+        end
         DiceVision.panelWaitingForRoll = false
         DiceVision.panelRequestId = generateRequestId()
         return
@@ -594,7 +607,10 @@ local function buildDiceMessage(rollDice, pendingRoll)
         end
         print("[DiceVision] Dropped dice: " .. table.concat(droppedValues, ", "))
     end
-    return diceForMessage, diceSum
+    -- Third return: the kept, rule-processed dice ({type, value} each) so
+    -- callers building forcedDice work from the same pipeline pass that
+    -- produced the displayed dice.
+    return diceForMessage, diceSum, processedDice
 end
 
 postRollToChat = function(rollData)
@@ -863,6 +879,107 @@ local function tryForcedDicePath(pendingRoll, rollData, diceForMessage, diceSum)
         end
     elseif not roll then
         print("DV: forcedDice - dmhub.Roll returned nil; re-rolls may not amend correctly")
+    end
+    return true
+end
+
+-- Panel forcedDice path: a panel roll has no pending Codex roll and thus no
+-- expression, so build one FROM the physical dice themselves (two d10s and
+-- a d6 -> "2d10+1d6") and hand it to dmhub.Roll with a matching forcedDice
+-- table. The virtual dice tumble to the physical values and the engine posts
+-- its own chat entry; the roll stays cosmetic (no creature/properties, no
+-- game effect), same as the chat-card-only display it upgrades.
+-- Returns true if it handled the roll; false means the caller must fall back
+-- to postRollToChat. Failures are print-only: unlike the intercepted path
+-- there is no expression the dice can mismatch, and even an out-of-range
+-- refusal (the one failure the intercepted path chat-announces) is harmless
+-- here because the fallback card still shows the result.
+tryPanelForcedDice = function(rollData)
+    -- Percentile pairs stay on the chat-card display: d100 is not a
+    -- supported forcedDice type and postRollToChat has dedicated rendering.
+    if DiceRollLogic.detectPercentilePair(rollData.dice) then
+        return false
+    end
+
+    -- Same pipeline pass as the card display: panel semantics (type
+    -- mappings only with /dv rules type panel on), keep-rule drops excluded.
+    local diceForMessage, diceSum, processed = buildDiceMessage(rollData.dice, nil)
+
+    local expr, expectedFaces = DiceRollLogic.buildPanelRollExpression(processed)
+    if not expr then
+        print(string.format("DV: panel forcedDice - %s; using chat-only display",
+            tostring(expectedFaces)))
+        return false
+    end
+
+    local forcedDice, reason = DiceRollLogic.buildForcedDice(processed, expectedFaces)
+    if not forcedDice then
+        print(string.format("DV: panel forcedDice - %s; using chat-only display",
+            tostring(reason)))
+        return false
+    end
+
+    local tokenid = DiceVision.panelTokenId
+
+    -- Optional chat card (off by default: the engine's native roll message
+    -- shows the dice). Same fields as postRollToChat's standard branch.
+    local visualMessage = nil
+    if DiceVision.forcedDiceChatCard then
+        visualMessage = DiceVisionRollMessage.new{
+            description = "Physical Dice Roll",
+            dice = diceForMessage,
+            modifier = 0,
+            total = diceSum,
+            tier = DiceRollLogic.calculateTier(diceSum),
+            tokenid = tokenid,
+            rollSource = "panel",
+        }
+    end
+
+    local roll = dmhub.Roll{
+        roll = expr,
+        forcedDice = forcedDice,
+        description = "Physical Dice Roll",
+        tokenid = tokenid,
+        -- Same best-effort, NON-DISABLING check as tryForcedDicePath: one
+        -- quiet note per session when the engine returns no readable dice.
+        -- The card send is pcall'd so a cosmetic failure cannot block the
+        -- engine's completion.
+        complete = function(rollInfo)
+            local honored = DiceRollLogic.forcedDiceHonored(rollInfo, forcedDice)
+            if honored == false then
+                -- Unlike the intercepted path, this wrapper is never
+                -- re-fired by doRerollAmend with a stale forced set, so a
+                -- first-completion mismatch is a real signal: an old build
+                -- ignoring forcedDice, or the user rerolling the engine's
+                -- chat entry. Console breadcrumb only -- a chat warning
+                -- could still false-positive on that reroll.
+                print("DV: panel forcedDice - completed dice did not match the forced values (old build ignoring forcedDice, or a reroll)")
+            end
+            if not DiceVision.warnedUnverifiedForcedDice and honored == nil then
+                DiceVision.warnedUnverifiedForcedDice = true
+                chat.Send("[DiceVision] Note: couldn't read the dice results to confirm your physical values were used. If your physical dice are being ignored, run /dv forceddice off.")
+            end
+            if visualMessage then
+                local ok, err = pcall(chat.SendCustom, visualMessage)
+                if not ok then
+                    print("DV: panel forcedDice - card send failed: " .. tostring(err))
+                end
+            end
+        end,
+    }
+    -- An error thrown by dmhub.Roll itself AFTER the engine accepted the
+    -- roll would escape to the dispatch pcall and add a fallback card on
+    -- top of the engine entry (cosmetic double display; the roll has no
+    -- game effect). Everything below is throw-free, so that call is the
+    -- whole window.
+    -- Clear only on success: a fallback to postRollToChat must keep the
+    -- token attribution for its card.
+    DiceVision.panelTokenId = nil
+    if roll then
+        print(string.format("DV: panel forcedDice - rolled '%s' with %d forced dice", expr, #forcedDice))
+    else
+        print(string.format("DV: panel forcedDice - dmhub.Roll returned nil for '%s'; the roll may not have been posted", expr))
     end
     return true
 end
@@ -1388,7 +1505,7 @@ DiceVision.setUseForcedDice = function(enabled)
         DiceVision.warnedUnverifiedForcedDice = false
         chat.Send("[DiceVision] forcedDice enabled. Requires a Codex build with dmhub.Roll forcedDice support: an older build ignores it and rolls VIRTUAL dice. DiceVision does not auto-disable -- if your physical dice are being ignored, run /dv forceddice off.")
     else
-        chat.Send("[DiceVision] forcedDice disabled (legacy deterministic-total path)")
+        chat.Send("[DiceVision] forcedDice disabled (legacy deterministic-total path; panel rolls show chat card only)")
     end
     return DiceVision.useForcedDice
 end
@@ -1714,7 +1831,7 @@ Commands.dv = function(args)
   /dv mode <mode>     - Set mode: off or replace
   /dv refresh         - Re-probe Codex hooks (use after Codex update)
   /dv rules           - Configure dice processing rules
-  /dv forceddice <on|off>      - Use engine forcedDice (default on; never auto-disables, turn off manually on unsupported builds)
+  /dv forceddice <on|off>      - Use engine forcedDice, incl. panel rolls (default on; never auto-disables, turn off manually on unsupported builds)
   /dv forceddice card <on|off> - DiceVision chat card on forcedDice path
   /dv test            - Test API connection
 

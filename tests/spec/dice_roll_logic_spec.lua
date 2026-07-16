@@ -1493,6 +1493,85 @@ describe("buildForcedDice", function()
     end)
 end)
 
+describe("buildPanelRollExpression", function()
+    it("builds a single-die expression", function()
+        local expr, expected = DiceRollLogic.buildPanelRollExpression(
+            {{type = "d10", value = 7}})
+        assert.are.equal("1d10", expr)
+        assert.are.same({10}, expected)
+    end)
+
+    it("groups multiple dice of the same type", function()
+        local expr, expected = DiceRollLogic.buildPanelRollExpression(
+            {{type = "d10", value = 7}, {type = "d10", value = 3}})
+        assert.are.equal("2d10", expr)
+        assert.are.same({10, 10}, expected)
+    end)
+
+    it("groups mixed types largest die first", function()
+        local expr, expected = DiceRollLogic.buildPanelRollExpression({
+            {type = "d6", value = 4},
+            {type = "d20", value = 15},
+            {type = "d10", value = 9},
+            {type = "d10", value = 2},
+        })
+        assert.are.equal("1d20+2d10+1d6", expr)
+        assert.are.same({20, 10, 10, 6}, expected)
+    end)
+
+    it("aligns expectedFaces with buildForcedDice output", function()
+        -- The forced entries built from the same dice must line up with the
+        -- expression's slots regardless of physical arrival order.
+        local dice = {
+            {type = "d6", value = 4},
+            {type = "d10", value = 9},
+            {type = "d10", value = 2},
+        }
+        local expr, expected = DiceRollLogic.buildPanelRollExpression(dice)
+        assert.are.equal("2d10+1d6", expr)
+        local forced = DiceRollLogic.buildForcedDice(dice, expected)
+        assert.are.same({
+            {numFaces = 10, result = 9},
+            {numFaces = 10, result = 2},
+            {numFaces = 6, result = 4},
+        }, forced)
+    end)
+
+    it("supports d3 (remapped Draw Steel d6)", function()
+        local expr, expected = DiceRollLogic.buildPanelRollExpression(
+            {{type = "d3", value = 2}})
+        assert.are.equal("1d3", expr)
+        assert.are.same({3}, expected)
+    end)
+
+    it("returns unsupported-type for a d100", function()
+        local expr, reason = DiceRollLogic.buildPanelRollExpression(
+            {{type = "d100", value = 40}})
+        assert.is_nil(expr)
+        assert.are.equal("unsupported-type", reason)
+    end)
+
+    it("returns unsupported-type for unrecognized or missing types", function()
+        local expr, reason = DiceRollLogic.buildPanelRollExpression(
+            {{type = "unknown", value = 5}})
+        assert.is_nil(expr)
+        assert.are.equal("unsupported-type", reason)
+        expr, reason = DiceRollLogic.buildPanelRollExpression(
+            {{type = nil, value = 5}})
+        assert.is_nil(expr)
+        assert.are.equal("unsupported-type", reason)
+    end)
+
+    it("returns missing-input for empty or nil input", function()
+        local expr, reason = DiceRollLogic.buildPanelRollExpression({})
+        assert.is_nil(expr)
+        assert.are.equal("missing-input", reason)
+        expr, reason = DiceRollLogic.buildPanelRollExpression(nil)
+        assert.is_nil(expr)
+        assert.are.equal("missing-input", reason)
+    end)
+end)
+
 describe("forcedDiceHonored", function()
     local FORCED = {{numFaces = 10, result = 7}, {numFaces = 10, result = 3}}
 

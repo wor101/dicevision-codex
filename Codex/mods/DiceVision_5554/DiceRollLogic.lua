@@ -441,6 +441,44 @@ function DiceRollLogic.buildForcedDice(dice, expectedFaces)
     return forced
 end
 
+--- Build a roll expression FROM physical dice, for panel rolls that have no
+-- pending Codex roll (and thus no expression of their own). Dice are grouped
+-- by face count, largest die first: two d10s and a d6 -> "2d10+1d6".
+-- dice: rule-processed dice ({type, value} each), dropped dice already
+-- excluded.
+-- Returns exprString, expectedFaces on success -- expectedFaces is ordered to
+-- match the expression's dice slots so buildForcedDice(dice, expectedFaces)
+-- yields entries aligned with the expression -- or nil, reason on failure
+-- ("missing-input", "unsupported-type"). Any failure means the caller should
+-- use the chat-card-only display.
+function DiceRollLogic.buildPanelRollExpression(dice)
+    if type(dice) ~= "table" or #dice == 0 then
+        return nil, "missing-input"
+    end
+    local counts = {}
+    for _, die in ipairs(dice) do
+        local faces = strictDiceFaces(die.type)
+        if not faces or not SUPPORTED_FORCED_DICE[faces] then
+            return nil, "unsupported-type"
+        end
+        counts[faces] = (counts[faces] or 0) + 1
+    end
+    local order = {}
+    for faces in pairs(counts) do
+        order[#order + 1] = faces
+    end
+    table.sort(order, function(a, b) return a > b end)
+    local parts = {}
+    local expectedFaces = {}
+    for _, faces in ipairs(order) do
+        parts[#parts + 1] = string.format("%dd%d", counts[faces], faces)
+        for _ = 1, counts[faces] do
+            expectedFaces[#expectedFaces + 1] = faces
+        end
+    end
+    return table.concat(parts, "+"), expectedFaces
+end
+
 --- Compare a forcedDice table against the completed roll's rollInfo.rolls
 -- (each entry: {result, numFaces, ...}).
 -- Returns true if every forced entry appears in the rolled dice (subset
