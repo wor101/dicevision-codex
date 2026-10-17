@@ -109,6 +109,9 @@ Pure roll utility and dice rule processing functions, extracted from DiceVision.
 
 | Function | Purpose |
 |----------|---------|
+| `faceNumber(face)` | Number a face string stands for ("7", "00" -> 0, "pip_4" -> 4, "-1" -> -1; nil for other symbols) |
+| `parseDie(die)` | Server die -> `{type, rawValue, value, readable}` (see Reading Dice From the Server) |
+| `unreadableDice(dice)` | The parsed dice the camera couldn't read |
 | `extractModifierFromRoll(str)` | Get modifier from "2d10+5" |
 | `getDiceFaces(dieType)` | Get face count from "d10" |
 | `calculateTier(total)` | Raw tier from total (1-11=T1, 12-16=T2, 17+=T3) |
@@ -511,13 +514,32 @@ No core Codex file modifications are needed. The `RollDialog.OnBeforeRoll` callb
 
 ---
 
+## Reading Dice From the Server
+
+The server sends each die as `{type, value, face, readable}` (the shared VTT roll format, see the DiceVision repo's `docs/integrations/VTT.md`):
+
+- `face` is the face string: `"7"`, `"00"`, `"30"`, `"pip_4"` (pip d6), or `"-1"` when the camera couldn't read it.
+- `readable` is `false` when the die couldn't be read.
+- `value` is the face's number. The Codex long-poll still sends `value` as the face string, for mod versions that predate `face`.
+
+`handleDiceVisionRoll` runs every die through `DiceRollLogic.parseDie`, which reads all three shapes (numeric `value`, string `value`, and an older server's `{type, value}` with no `face`). `rawValue` is the face string; `value` is its number (pips as their dot count).
+
+**Unreadable dice.** A die with `readable = false` (or a face with no number) would otherwise count as 0, so the mod doesn't use the roll:
+
+- Waiting (replace-mode roll, table roll, re-roll, or panel roll): chat says `Couldn't read: d10. Reroll it -- still waiting for your dice.` and the long-poll goes on waiting under a new `request_id` (the server won't re-arm the dashboard for a fulfilled one). If no readable roll arrives before the poll times out, the usual virtual-dice fallback applies.
+- Not waiting, replace mode: chat says `Couldn't read: ... Roll not posted.`
+
+Before this, pip dice reached the mod as `"pip_4"`, which `tonumber` turned into 0.
+
+---
+
 ## Percentile (d100) Detection
 
-DiceVision can detect percentile (d100) rolls when the API sends die values as **strings**. This preserves the distinction between `"0"` (standard d10 zero face) and `"00"` (percentile tens-die zero face).
+DiceVision can detect percentile (d100) rolls because the die's face string is kept. This preserves the distinction between `"0"` (standard d10 zero face) and `"00"` (percentile tens-die zero face).
 
 ### How It Works
 
-1. **String preservation**: `handleDiceVisionRoll` saves each die's original string as `die.rawValue` before converting `die.value` to an integer.
+1. **String preservation**: `parseDie` keeps each die's face string as `die.rawValue` (from `face`, or from `value` on older servers) next to its number in `die.value`.
 2. **Detection**: `DiceRollLogic.detectPercentilePair(dice)` examines `rawValue` strings on exactly 2 d10 dice:
    - **Tens die**: `rawValue` is `"00"` or a two-digit multiple of 10 (`"10"`, `"20"`, ... `"90"`)
    - **Units die**: `rawValue` is a single digit (`"0"` through `"9"`)
@@ -526,7 +548,7 @@ DiceVision can detect percentile (d100) rolls when the API sends die values as *
 
 ### Dependency
 
-This feature requires the DiceVision API router to send die values as **strings** rather than integers. If the router converts to integers before sending, all values arrive as numbers and percentile detection cannot distinguish `"00"` from `"0"`.
+This feature needs the face string: the server's `face` field, or a string `value` from servers that predate `face`. Mod versions before `parseDie` read only `value`, which is why the long-poll keeps sending `value` as the face string.
 
 ### Key Cases
 

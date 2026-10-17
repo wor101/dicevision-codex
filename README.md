@@ -96,6 +96,8 @@ All of these are also available in the settings popup.
 
 Two physical d10s rolling "00" + "0" are detected as a percentile pair and map to 100.
 
+Pip d6s count as their dots. If the camera couldn't read a die, the mod says which one in chat and doesn't use the roll: reroll and it keeps waiting.
+
 ### Value Clamping
 
 When enabled with `/dv rules clamp on`, any dice value outside the 0-10 range is clamped to 1. This helps handle misread dice where DiceVision might return an invalid value like 14 or -3.

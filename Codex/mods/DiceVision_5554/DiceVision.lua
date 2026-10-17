@@ -431,21 +431,39 @@ local function handleSessionExpired() -- luacheck: ignore
     DiceVision.sessionCode = nil
 end
 
+-- Returns true when the roll was turned away because a die couldn't be read;
+-- a waiting roll then keeps waiting for the next one.
 local function handleDiceVisionRoll(rollData)
     -- Build new dice tables from API response (net.Get tables don't support assignment)
     local convertedDice = {}
     for i, die in ipairs(rollData.dice) do
-        convertedDice[i] = {
-            type = die.type,
-            rawValue = die.value,  -- Preserve original string (e.g., "00", "30", "7")
-            value = tonumber(die.value) or 0,
-        }
+        convertedDice[i] = DiceRollLogic.parseDie(die)
     end
     rollData = { dice = convertedDice, total = rollData.total }
 
     print(string.format("DV: handleDiceVisionRoll - panelWaiting=%s, mode=%s, waitingForRoll=%s, dice=%s",
         tostring(DiceVision.panelWaitingForRoll), DiceVision.mode, tostring(DiceVision.waitingForRoll),
         formatDice(rollData.dice)))
+
+    -- A die the camera couldn't read would count as 0, so don't use the roll
+    local unreadable = DiceRollLogic.unreadableDice(rollData.dice)
+    local waiting = DiceVision.panelWaitingForRoll
+        or (DiceVision.mode == "replace" and DiceVision.waitingForRoll)
+    if #unreadable > 0 and (waiting or DiceVision.mode == "replace") then
+        local types = {}
+        for _, die in ipairs(unreadable) do
+            types[#types + 1] = tostring(die.type)
+        end
+        if waiting then
+            chat.Send(string.format("[DiceVision] Couldn't read: %s. Reroll it -- still waiting for your dice.",
+                table.concat(types, ", ")))
+        else
+            chat.Send(string.format("[DiceVision] Couldn't read: %s. Roll not posted.",
+                table.concat(types, ", ")))
+        end
+        return true
+    end
+
     -- Handle panel-initiated roll first
     if DiceVision.panelWaitingForRoll then
         postRollToChat(rollData)
@@ -517,10 +535,27 @@ longPollForRolls = function()
         url = url,
         success = function(data)
             -- Process response
+            local unreadableRoll = false
             if data and data.rolls then
                 for _, roll in ipairs(data.rolls) do
-                    handleDiceVisionRoll(roll)
+                    if handleDiceVisionRoll(roll) then
+                        unreadableRoll = true
+                    end
                 end
+            end
+
+            -- A roll with an unreadable die isn't a timeout: wait for the reroll.
+            -- The server marked the old request_id fulfilled, and wouldn't
+            -- re-arm the dashboard for it, so wait under a new one.
+            if unreadableRoll and DiceVision.connected
+                and (DiceVision.waitingForRoll or DiceVision.panelWaitingForRoll) then
+                if DiceVision.waitingForRoll then
+                    DiceVision.currentRequestId = generateRequestId()
+                else
+                    DiceVision.panelRequestId = generateRequestId()
+                end
+                longPollForRolls()
+                return
             end
             DiceVision.isPolling = false
 

@@ -1584,3 +1584,72 @@ describe("forcedDiceHonored", function()
             {{numFaces = 10, result = 7}}))
     end)
 end)
+
+-- ============================================================================
+-- Reading dice from the server
+-- ============================================================================
+
+describe("faceNumber", function()
+    it("reads numerals, 00, pips and the -1 placeholder", function()
+        assert.are.equal(7, DiceRollLogic.faceNumber("7"))
+        assert.are.equal(0, DiceRollLogic.faceNumber("00"))
+        assert.are.equal(30, DiceRollLogic.faceNumber("30"))
+        assert.are.equal(4, DiceRollLogic.faceNumber("pip_4"))
+        assert.are.equal(-1, DiceRollLogic.faceNumber("-1"))
+        assert.are.equal(5, DiceRollLogic.faceNumber(5))
+    end)
+
+    it("returns nil for other symbols", function()
+        assert.is_nil(DiceRollLogic.faceNumber(nil))
+        assert.is_nil(DiceRollLogic.faceNumber("unknown"))
+        assert.is_nil(DiceRollLogic.faceNumber("skull"))
+        assert.is_nil(DiceRollLogic.faceNumber("pip_x"))
+        assert.is_nil(DiceRollLogic.faceNumber(""))
+    end)
+end)
+
+describe("parseDie", function()
+    it("reads the long-poll shape (value is the face string)", function()
+        local die = DiceRollLogic.parseDie({ type = "d6", value = "pip_4", face = "pip_4", readable = true })
+        assert.are.same({ type = "d6", rawValue = "pip_4", value = 4, readable = true }, die)
+    end)
+
+    it("reads a numeric value and keeps the face string", function()
+        local die = DiceRollLogic.parseDie({ type = "d10", value = 0, face = "00", readable = true })
+        assert.are.same({ type = "d10", rawValue = "00", value = 0, readable = true }, die)
+    end)
+
+    it("reads an older server's {type, value}", function()
+        assert.are.same({ type = "d10", rawValue = "00", value = 0, readable = true },
+            DiceRollLogic.parseDie({ type = "d10", value = "00" }))
+        assert.are.same({ type = "d20", rawValue = "17", value = 17, readable = true },
+            DiceRollLogic.parseDie({ type = "d20", value = "17" }))
+    end)
+
+    it("marks a die unreadable when the server says so", function()
+        local die = DiceRollLogic.parseDie({ type = "d8", value = "-1", face = "-1", readable = false })
+        assert.is_false(die.readable)
+        assert.are.equal(0, die.value)
+        assert.are.equal("-1", die.rawValue)
+    end)
+
+    it("marks placeholders and unknown symbols unreadable without a readable field", function()
+        assert.is_false(DiceRollLogic.parseDie({ type = "d8", value = "-1" }).readable)
+        assert.is_false(DiceRollLogic.parseDie({ type = "d8", value = -1 }).readable)
+        assert.is_false(DiceRollLogic.parseDie({ type = "d8", value = "unknown" }).readable)
+        assert.is_false(DiceRollLogic.parseDie({ type = "d8" }).readable)
+    end)
+end)
+
+describe("unreadableDice", function()
+    it("lists only the unreadable dice", function()
+        local dice = {
+            DiceRollLogic.parseDie({ type = "d10", value = "7" }),
+            DiceRollLogic.parseDie({ type = "d6", value = "-1", readable = false }),
+        }
+        local unreadable = DiceRollLogic.unreadableDice(dice)
+        assert.are.equal(1, #unreadable)
+        assert.are.equal("d6", unreadable[1].type)
+        assert.are.equal(0, #DiceRollLogic.unreadableDice({}))
+    end)
+end)

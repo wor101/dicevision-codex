@@ -12,6 +12,61 @@ DiceRollLogic = {}
 -- Pure Utility Functions
 -- ============================================================================
 
+--- The number a DiceVision face string stands for.
+-- "7" -> 7, "00" -> 0, "pip_4" -> 4 (pip dice), "-1" (the server's
+-- placeholder for an unread face) -> -1. nil for any other symbol.
+function DiceRollLogic.faceNumber(face)
+    if face == nil then
+        return nil
+    end
+    local s = tostring(face)
+    local pips = s:match("^pip_(%-?%d+)$")
+    if pips then
+        return tonumber(pips)
+    end
+    if s:match("^%-?%d+$") then
+        return tonumber(s)
+    end
+    return nil
+end
+
+--- One die from a DiceVision roll, as the mod uses it.
+-- The server sends {type, value, face, readable}: face is the face string
+-- ("00", "30", "pip_4") and readable is false when the camera couldn't read
+-- the die. The long-poll still sends value as the face string; older servers
+-- send only {type, value}. All three shapes are read here.
+-- Returns {type, rawValue, value, readable}: rawValue is the face string (for
+-- percentile detection and display), value its number, or 0 when unreadable.
+function DiceRollLogic.parseDie(die)
+    local face = die.face
+    if face == nil then
+        face = die.value
+    end
+    face = face ~= nil and tostring(face) or "-1"
+    local value = die.value
+    if type(value) ~= "number" then
+        value = DiceRollLogic.faceNumber(face)
+    end
+    local readable = die.readable ~= false and value ~= nil and value >= 0 and value % 1 == 0
+    return {
+        type = die.type,
+        rawValue = face,
+        value = readable and value or 0,
+        readable = readable,
+    }
+end
+
+--- The dice in a parsed roll the camera couldn't read.
+function DiceRollLogic.unreadableDice(dice)
+    local unreadable = {}
+    for _, die in ipairs(dice or {}) do
+        if not die.readable then
+            unreadable[#unreadable + 1] = die
+        end
+    end
+    return unreadable
+end
+
 function DiceRollLogic.extractModifierFromRoll(rollStr)
     if not rollStr then return 0 end
     -- Sum every standalone +N/-N term. The trailing [dD]? capture filters
