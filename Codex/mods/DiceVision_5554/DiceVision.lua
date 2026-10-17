@@ -20,6 +20,10 @@ DiceVision = {
     -- Polling state
     isPolling = false,
     lastPollTime = 0,
+    -- Bumped by startPolling; a response from an older loop's request is stale
+    pollGeneration = 0,
+    -- Rerolls asked for after unreadable dice before a waiting roll gives up
+    maxUnreadableRerolls = 3,
 
     -- Pending roll state
     pendingRoll = nil,
@@ -431,21 +435,47 @@ local function handleSessionExpired() -- luacheck: ignore
     DiceVision.sessionCode = nil
 end
 
+-- Returns true when the roll was turned away because a die couldn't be read;
+-- longPollForRolls then re-polls if a roll is still waiting.
 local function handleDiceVisionRoll(rollData)
+    if type(rollData) ~= "table" or type(rollData.dice) ~= "table" then
+        error("roll has no dice table")
+    end
     -- Build new dice tables from API response (net.Get tables don't support assignment)
     local convertedDice = {}
     for i, die in ipairs(rollData.dice) do
-        convertedDice[i] = {
-            type = die.type,
-            rawValue = die.value,  -- Preserve original string (e.g., "00", "30", "7")
-            value = tonumber(die.value) or 0,
-        }
+        convertedDice[i] = DiceRollLogic.parseDie(die)
     end
     rollData = { dice = convertedDice, total = rollData.total }
 
     print(string.format("DV: handleDiceVisionRoll - panelWaiting=%s, mode=%s, waitingForRoll=%s, dice=%s",
         tostring(DiceVision.panelWaitingForRoll), DiceVision.mode, tostring(DiceVision.waitingForRoll),
         formatDice(rollData.dice)))
+
+    -- A die the camera couldn't read would count as 0, so don't use the roll
+    local unreadable = DiceRollLogic.unreadableDice(rollData.dice)
+    local waiting = DiceVision.panelWaitingForRoll
+        or (DiceVision.mode == "replace" and DiceVision.waitingForRoll)
+    if #unreadable > 0 and (waiting or DiceVision.mode == "replace") then
+        local types = {}
+        for _, die in ipairs(unreadable) do
+            if die.unrecognized then
+                -- The server read it, but the face isn't a number the mod can use
+                types[#types + 1] = string.format("%s (face '%s')", tostring(die.type), die.rawValue)
+            else
+                types[#types + 1] = tostring(die.type)
+            end
+        end
+        if waiting then
+            chat.Send(string.format("[DiceVision] Couldn't read: %s. Reroll it -- still waiting for your dice.",
+                table.concat(types, ", ")))
+        else
+            chat.Send(string.format("[DiceVision] Couldn't read: %s. Roll not posted.",
+                table.concat(types, ", ")))
+        end
+        return true
+    end
+
     -- Handle panel-initiated roll first
     if DiceVision.panelWaitingForRoll then
         postRollToChat(rollData)
@@ -490,7 +520,10 @@ abandonPendingRoll = function()
     end
 end
 
-longPollForRolls = function()
+-- rerolls counts the unreadable rolls this wait has already re-polled for.
+longPollForRolls = function(rerolls)
+    rerolls = rerolls or 0
+    local generation = DiceVision.pollGeneration
     if not DiceVision.connected or not DiceVision.sessionCode then
         return
     end
@@ -517,10 +550,44 @@ longPollForRolls = function()
         url = url,
         success = function(data)
             -- Process response
+            local unreadableRoll = false
             if data and data.rolls then
                 for _, roll in ipairs(data.rolls) do
-                    handleDiceVisionRoll(roll)
+                    -- A malformed roll mustn't throw out of this callback: that
+                    -- would strand isPolling=true and the waiting roll with it
+                    local ok, result = pcall(handleDiceVisionRoll, roll)
+                    if not ok then
+                        printf("[DiceVision] Couldn't process roll: %s", tostring(result))
+                        chat.Send("[DiceVision] Got a roll it couldn't process. Ignoring it.")
+                    elseif result then
+                        unreadableRoll = true
+                    end
                 end
+            end
+
+            -- startPolling began a newer loop after this request went out
+            -- (the roll was cancelled and a new one started). That loop owns
+            -- re-polling and the timeout; acting here would run two loops or
+            -- time its roll out early.
+            if generation ~= DiceVision.pollGeneration then
+                return
+            end
+
+            local waiting = DiceVision.waitingForRoll or DiceVision.panelWaitingForRoll
+            if unreadableRoll and waiting and DiceVision.connected and DiceVision.isPolling then
+                if rerolls < DiceVision.maxUnreadableRerolls then
+                    -- A roll with an unreadable die isn't a timeout: wait for the
+                    -- reroll. The server marked the old request_id fulfilled, and
+                    -- wouldn't re-arm the dashboard for it, so wait under a new one.
+                    if DiceVision.waitingForRoll then
+                        DiceVision.currentRequestId = generateRequestId()
+                    else
+                        DiceVision.panelRequestId = generateRequestId()
+                    end
+                    longPollForRolls(rerolls + 1)
+                    return
+                end
+                chat.Send("[DiceVision] Still couldn't read your dice. Giving up on this roll.")
             end
             DiceVision.isPolling = false
 
@@ -543,6 +610,10 @@ longPollForRolls = function()
         end,
         error = function(err, statusCode)
             printf("[DiceVision] Long-poll error: %s (status: %s)", tostring(err), tostring(statusCode or "unknown"))
+            -- A newer loop owns polling; don't fail its roll for this old request
+            if generation ~= DiceVision.pollGeneration then
+                return
+            end
             DiceVision.isPolling = false
 
             -- Replace mode: fall back to virtual dice on error
@@ -1177,6 +1248,7 @@ startPolling = function()
     end
 
     DiceVision.isPolling = true
+    DiceVision.pollGeneration = DiceVision.pollGeneration + 1
     longPollForRolls()
 end
 
