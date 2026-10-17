@@ -1597,6 +1597,8 @@ describe("faceNumber", function()
         assert.are.equal(4, DiceRollLogic.faceNumber("pip_4"))
         assert.are.equal(-1, DiceRollLogic.faceNumber("-1"))
         assert.are.equal(5, DiceRollLogic.faceNumber(5))
+        assert.are.equal(7, DiceRollLogic.faceNumber("7.0"))
+        assert.are.equal(3.5, DiceRollLogic.faceNumber("3.5"))
     end)
 
     it("returns nil for other symbols", function()
@@ -1611,18 +1613,18 @@ end)
 describe("parseDie", function()
     it("reads the long-poll shape (value is the face string)", function()
         local die = DiceRollLogic.parseDie({ type = "d6", value = "pip_4", face = "pip_4", readable = true })
-        assert.are.same({ type = "d6", rawValue = "pip_4", value = 4, readable = true }, die)
+        assert.are.same({ type = "d6", rawValue = "pip_4", value = 4, readable = true, unrecognized = false }, die)
     end)
 
     it("reads a numeric value and keeps the face string", function()
         local die = DiceRollLogic.parseDie({ type = "d10", value = 0, face = "00", readable = true })
-        assert.are.same({ type = "d10", rawValue = "00", value = 0, readable = true }, die)
+        assert.are.same({ type = "d10", rawValue = "00", value = 0, readable = true, unrecognized = false }, die)
     end)
 
     it("reads an older server's {type, value}", function()
-        assert.are.same({ type = "d10", rawValue = "00", value = 0, readable = true },
+        assert.are.same({ type = "d10", rawValue = "00", value = 0, readable = true, unrecognized = false },
             DiceRollLogic.parseDie({ type = "d10", value = "00" }))
-        assert.are.same({ type = "d20", rawValue = "17", value = 17, readable = true },
+        assert.are.same({ type = "d20", rawValue = "17", value = 17, readable = true, unrecognized = false },
             DiceRollLogic.parseDie({ type = "d20", value = "17" }))
     end)
 
@@ -1638,6 +1640,45 @@ describe("parseDie", function()
         assert.is_false(DiceRollLogic.parseDie({ type = "d8", value = -1 }).readable)
         assert.is_false(DiceRollLogic.parseDie({ type = "d8", value = "unknown" }).readable)
         assert.is_false(DiceRollLogic.parseDie({ type = "d8" }).readable)
+    end)
+
+    it("trusts the server's readable = false over a face that parses", function()
+        local die = DiceRollLogic.parseDie({ type = "d10", value = "7", face = "7", readable = false })
+        assert.is_false(die.readable)
+        assert.are.equal(0, die.value)
+    end)
+
+    it("treats a readable that isn't true or nil as unreadable", function()
+        assert.is_false(DiceRollLogic.parseDie({ type = "d10", value = "7", readable = "false" }).readable)
+        assert.is_false(DiceRollLogic.parseDie({ type = "d10", value = "7", readable = 0 }).readable)
+    end)
+
+    it("treats the -1 face as unreadable whatever value says", function()
+        assert.is_false(DiceRollLogic.parseDie({ type = "d10", value = 3, face = "-1" }).readable)
+    end)
+
+    it("uses a numeric value over the face and keeps the face as rawValue", function()
+        local die = DiceRollLogic.parseDie({ type = "d6", value = 4, face = "pip_6", readable = true })
+        assert.are.equal(4, die.value)
+        assert.are.equal("pip_6", die.rawValue)
+    end)
+
+    it("rejects fractional values and accepts whole decimals", function()
+        assert.is_false(DiceRollLogic.parseDie({ type = "d10", value = 3.5 }).readable)
+        assert.is_false(DiceRollLogic.parseDie({ type = "d10", value = "3.5" }).readable)
+        local whole = DiceRollLogic.parseDie({ type = "d10", value = "7.0" })
+        assert.is_true(whole.readable)
+        assert.are.equal(7, whole.value)
+        assert.are.equal("7", tostring(whole.value))
+    end)
+
+    it("marks a face the server read but that has no number as unrecognized", function()
+        local die = DiceRollLogic.parseDie({ type = "d6", value = "skull", face = "skull", readable = true })
+        assert.is_false(die.readable)
+        assert.is_true(die.unrecognized)
+        -- Without the server's word that it read the die, it's just unreadable
+        assert.is_false(DiceRollLogic.parseDie({ type = "d6", value = "skull" }).unrecognized)
+        assert.is_false(DiceRollLogic.parseDie({ type = "d6", value = "-1", readable = false }).unrecognized)
     end)
 end)
 

@@ -62,6 +62,7 @@ Tests use [Busted](https://lunarmodules.github.io/busted/) (BDD-style Lua testin
 | `.busted` | Busted configuration |
 | `tests/helpers/test_setup.lua` | Shared setup: loads modules, stubs globals |
 | `tests/spec/dice_roll_logic_spec.lua` | Tests for all DiceRollLogic functions |
+| `tests/spec/dice_vision_spec.lua` | Tests for DiceVision.lua (polling, roll interception, commands, chat) |
 
 **Run tests:**
 ```bash

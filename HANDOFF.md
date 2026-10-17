@@ -476,7 +476,7 @@ Trade-off (same as the real-d20 divert): a REAL d6 rolled for a d6 expression is
 
 When `clampOutOfRange` is enabled:
 - Applies to **all rolls** (targeted, non-targeted, and chat mode)
-- Values < 0 or > 10 are clamped to 1
+- Values > 10 are clamped to 1 (negative values are rejected as unreadable before the rules run, see Reading Dice From the Server)
 - Logs clamped values: `[DiceVision] Clamped d10 value 14 -> 1 (out of 0-10 range)`
 - Useful for handling DiceVision misreads
 
@@ -520,16 +520,17 @@ The server sends each die as `{type, value, face, readable}` (the shared VTT rol
 
 - `face` is the face string: `"7"`, `"00"`, `"30"`, `"pip_4"` (pip d6), or `"-1"` when the camera couldn't read it.
 - `readable` is `false` when the die couldn't be read.
-- `value` is the face's number. The Codex long-poll still sends `value` as the face string, for mod versions that predate `face`.
+- `value`: in the shared VTT format it's the face's number, but the Codex long-poll sends it as the face string instead, for mod versions that predate `face`. (Server behaviour; check the DiceVision repo if it changes.)
 
-`handleDiceVisionRoll` runs every die through `DiceRollLogic.parseDie`, which reads all three shapes (numeric `value`, string `value`, and an older server's `{type, value}` with no `face`). `rawValue` is the face string; `value` is its number (pips as their dot count).
+`handleDiceVisionRoll` runs every die through `DiceRollLogic.parseDie`, which reads all three shapes (numeric `value`, string `value`, and an older server's `{type, value}` with no `face`). `rawValue` is the face string; `value` is its number (pips as their dot count). A numeric `value` wins over `face`; a whole decimal like `"7.0"` reads as 7.
 
-**Unreadable dice.** A die with `readable = false` (or a face with no number) would otherwise count as 0, so the mod doesn't use the roll:
+**Unreadable dice.** A die is unreadable when `readable` is anything but `true` or missing, the face is `"-1"`, the face has no number, or the value is negative or fractional. It would otherwise count as 0, so the mod doesn't use the roll:
 
-- Waiting (replace-mode roll, table roll, re-roll, or panel roll): chat says `Couldn't read: d10. Reroll it -- still waiting for your dice.` and the long-poll goes on waiting under a new `request_id` (the server won't re-arm the dashboard for a fulfilled one). If no readable roll arrives before the poll times out, the usual virtual-dice fallback applies.
+- Waiting (replace-mode roll, table roll, re-roll, or panel roll): chat says `Couldn't read: d10. Reroll it -- still waiting for your dice.` and the long-poll goes on waiting under a new `request_id` (the server won't re-arm the dashboard for a fulfilled one). Each re-poll waits a fresh 25s. After `DiceVision.maxUnreadableRerolls` (3) unreadable rerolls, or when a re-poll times out with no roll, chat says so and the usual virtual-dice fallback (or panel timeout) applies.
+- A face the server marked readable but that has no number (e.g. `"skull"`) is named in the message: `Couldn't read: d6 (face 'skull')`.
 - Not waiting, replace mode: chat says `Couldn't read: ... Roll not posted.`
 
-Before this, pip dice reached the mod as `"pip_4"`, which `tonumber` turned into 0.
+**Polling robustness.** `startPolling` bumps `DiceVision.pollGeneration`; a long-poll response from an older loop (a roll cancelled mid-poll, then a new one started) still has its rolls handled, but doesn't re-poll or time out the newer loop's roll. Each roll in a response is handled under `pcall`, so a malformed roll is reported in chat and skipped instead of stranding `isPolling = true`.
 
 ---
 

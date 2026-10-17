@@ -4875,6 +4875,131 @@ describe("DiceVision", function()
             assert.are.equal(6, card.dice[2].value)
         end)
 
+        local function d10(face)
+            return { type = "d10", value = face, face = face, readable = face ~= "-1" }
+        end
+
+        local function customCards()
+            local cards = {}
+            for _, entry in ipairs(_G._chatLog) do
+                if entry.type == "custom" then cards[#cards + 1] = entry.message end
+            end
+            return cards
+        end
+
+        it("keeps a panel roll waiting, under a new panel request_id, after an unreadable die", function()
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            DiceVision.panelWaitingForRoll = true
+            DiceVision.panelRequestId = "panel-1"
+            local urls, restore = serveRolls({
+                { rolls = {{ dice = { d10("7"), d10("-1") }, total = 7 }} },
+                { rolls = {{ dice = { d10("7"), d10("4") }, total = 11 }} },
+            })
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            restore()
+
+            assert.is_true(chatHas("still waiting"))
+            assert.is_false(chatHas("Timeout waiting for dice"))
+            assert.are.equal(2, #urls)
+            assert.are.equal("panel-1", urls[1]:match("request_id=([^&]+)"))
+            assert.are_not.equal("panel-1", urls[2]:match("request_id=([^&]+)"))
+            local cards = customCards()
+            assert.are.equal(1, #cards)
+            assert.are.equal(11, cards[1].total)
+        end)
+
+        it("uses the readable roll when one response also has an unreadable one", function()
+            local amended = nil
+            waitForReroll(function(val) amended = val end)
+            local urls, restore = serveRolls({
+                { rolls = {
+                    { dice = { d10("-1"), d10("3") }, total = 3 },
+                    { dice = { d10("7"), d10("4") }, total = 11 },
+                } },
+            })
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            restore()
+
+            assert.are.equal(1, #urls)
+            assert.are.equal("16", amended)
+            assert.is_false(DiceVision.isPolling)
+        end)
+
+        it("gives up after maxUnreadableRerolls rerolls and falls back to virtual dice", function()
+            local amended = nil
+            waitForReroll(function(val) amended = val end)
+            local responses = {}
+            for i = 1, DiceVision.maxUnreadableRerolls + 2 do
+                responses[i] = { rolls = {{ dice = { d10("-1"), d10("3") }, total = 3 }} }
+            end
+            local urls, restore = serveRolls(responses)
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            restore()
+
+            assert.are.equal(DiceVision.maxUnreadableRerolls + 1, #urls)
+            assert.is_true(chatHas("Still couldn't read your dice"))
+            assert.is_true(chatHas("Physical dice timeout"))
+            assert.are.equal("2d10+5", amended)
+            assert.is_false(DiceVision.isPolling)
+        end)
+
+        it("leaves a newer polling loop alone when an old request returns", function()
+            waitForReroll(function() end)
+            local calls = {}
+            local originalNetGet = net.Get
+            net.Get = function(args) calls[#calls + 1] = args end
+            DiceVision.isPolling = false
+            DiceVision.startPolling()    -- loop A
+            DiceVision.isPolling = false -- roll cancelled mid-poll
+            DiceVision.startPolling()    -- loop B
+            assert.are.equal(2, #calls)
+
+            -- Loop A's request comes back with an unreadable roll, then empty
+            calls[1].success({ rolls = {{ dice = { d10("-1"), d10("3") }, total = 3 }} })
+            calls[1].success({ rolls = {} })
+            calls[1].error("boom", 500)
+            net.Get = originalNetGet
+
+            assert.are.equal(2, #calls)  -- no second loop started
+            assert.is_true(DiceVision.waitingForRoll)
+            assert.is_true(DiceVision.isPolling)
+            assert.is_false(chatHas("Physical dice timeout"))
+            assert.is_false(chatHas("Connection error"))
+        end)
+
+        it("names a face the server read but the mod can't use", function()
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            DiceVision.panelWaitingForRoll = true
+            local _, restore = serveRolls({
+                { rolls = {{ dice = {{ type = "d6", value = "skull", face = "skull", readable = true }}, total = 0 }} },
+            })
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            restore()
+
+            assert.is_true(chatHas("Couldn't read: d6 (face 'skull')"))
+        end)
+
+        it("skips a malformed roll without wedging polling", function()
+            DiceVision.mode = "replace"
+            DiceVision.connected = true
+            DiceVision.sessionCode = "TEST"
+            local _, restore = serveRolls({
+                { rolls = { { total = 3 }, 42 } },
+            })
+            DiceVision.isPolling = false
+            DiceVision.startPolling()
+            restore()
+
+            assert.is_true(chatHas("couldn't process"))
+            assert.is_false(DiceVision.isPolling)
+        end)
+
         it("still detects a 00 + 0 percentile roll", function()
             DiceVision.connected = true
             DiceVision.sessionCode = "TEST"
