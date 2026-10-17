@@ -1611,7 +1611,7 @@ describe("faceNumber", function()
 end)
 
 describe("parseDie", function()
-    it("reads the long-poll shape (value is the face string)", function()
+    it("reads a string value (servers before dice-vision #421)", function()
         local die = DiceRollLogic.parseDie({ type = "d6", value = "pip_4", face = "pip_4", readable = true })
         assert.are.same({ type = "d6", rawValue = "pip_4", value = 4, readable = true, unrecognized = false }, die)
     end)

@@ -34,8 +34,8 @@ end
 --- One die from a DiceVision roll, as the mod uses it.
 -- The server sends {type, value, face, readable}: face is the face string
 -- ("00", "30", "pip_4") and readable is false when the camera couldn't read
--- the die. The long-poll still sends value as the face string; older servers
--- send only {type, value}. All three shapes are read here.
+-- the die. Servers before dice-vision PR #421 sent value as the face
+-- string, and before PR #420 only {type, value}. All three shapes are read here.
 -- Returns {type, rawValue, value, readable, unrecognized}: rawValue is the face
 -- string (for percentile detection and display), value its number, or 0 when
 -- unreadable. A numeric value wins over the face. A die is unreadable when

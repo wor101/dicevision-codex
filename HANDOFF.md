@@ -520,7 +520,7 @@ The server sends each die as `{type, value, face, readable}` (the shared VTT rol
 
 - `face` is the face string: `"7"`, `"00"`, `"30"`, `"pip_4"` (pip d6), or `"-1"` when the camera couldn't read it.
 - `readable` is `false` when the die couldn't be read.
-- `value`: in the shared VTT format it's the face's number, but the Codex long-poll sends it as the face string instead, for mod versions that predate `face`. (Server behaviour; check the DiceVision repo if it changes.)
+- `value`: the face's number (`"00"` and `"0"` are both 0, which is why `face` matters). Servers before dice-vision PR #421 sent it on the long-poll as the face string.
 
 `handleDiceVisionRoll` runs every die through `DiceRollLogic.parseDie`, which reads all three shapes (numeric `value`, string `value`, and an older server's `{type, value}` with no `face`). `rawValue` is the face string; `value` is its number (pips as their dot count). A numeric `value` wins over `face`; a whole decimal like `"7.0"` reads as 7.
 
@@ -549,7 +549,7 @@ DiceVision can detect percentile (d100) rolls because the die's face string is k
 
 ### Dependency
 
-This feature needs the face string: the server's `face` field, or a string `value` from servers that predate `face`. Mod versions before `parseDie` read only `value`, which is why the long-poll keeps sending `value` as the face string.
+This feature needs the face string: the server's `face` field, or a string `value` from servers that predate it. Mod versions before `parseDie` read only `value`, so against a server with numeric values (dice-vision PR #421 onward) they read `"00"` as `"0"` and miss percentile pairs.
 
 ### Key Cases
 
